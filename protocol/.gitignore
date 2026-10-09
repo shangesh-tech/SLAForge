@@ -1,0 +1,9 @@
+# Foundry build output
+cache/
+out/
+
+# Local deployment logs (chain id 31337 = anvil)
+broadcast/*/31337/
+
+# Secrets
+.env
