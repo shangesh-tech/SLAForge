@@ -7,7 +7,8 @@ const legacyContract = "0x1b96d63b9c75555b44727de4bde2d0a7b9991e95";
 
 /**
  * Monitor data belongs to one contract: a new deployment restarts its ids at 1,
- * so each contract gets its own collections (checks_1a2b3c4d…).
+ * so each contract gets its own collections (checks_1a2b3c4d…). Must match
+ * collectionName() in monitor/src/db.js, which writes these collections.
  */
 export const monitorCollection = (name: string) => {
   const address = SLAFORGE_ADDRESS.toLowerCase();
@@ -37,10 +38,8 @@ export async function db() {
   );
   if (!indexed) {
     indexed = true;
-    await Promise.all([
-      database.collection("profiles").createIndex({ role: 1 }),
-      database.collection(monitorCollection("checks")).createIndex({ serviceId: 1, at: 1 }),
-    ]);
+    // The monitor service (../monitor) creates the indexes for its own collections.
+    await database.collection("profiles").createIndex({ role: 1 });
   }
   return database;
 }

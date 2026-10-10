@@ -21,7 +21,7 @@ export async function GET(
     })
     .sort({ at: -1 })
     .toArray();
-  const m = measure(service, agreement, window);
+  const m = measure(service, window);
   const settlement = await settlements.findOne({ _id: agreement.id });
   return Response.json({
     checks: window.slice(0, 20).map((c) => ({
