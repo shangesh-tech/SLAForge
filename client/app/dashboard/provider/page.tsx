@@ -1,9 +1,9 @@
 import { ProviderDashboard } from "@/components/dashboards";
-export default async function Page({
-  searchParams,
-}: {
-  searchParams: Promise<{ provider?: string }>;
-}) {
-  const { provider } = await searchParams;
-  return <ProviderDashboard initialProvider={provider} />;
+import { RoleGate } from "@/components/role-gate";
+export default function Page() {
+  return (
+    <RoleGate need="Provider">
+      <ProviderDashboard />
+    </RoleGate>
+  );
 }

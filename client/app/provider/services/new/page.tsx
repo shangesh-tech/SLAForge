@@ -13,21 +13,37 @@ import {
   ShieldCheck,
   Trash2,
 } from "lucide-react";
+import { Select } from "@/components/select";
+import { ConfidenceMeter } from "@/components/confidence";
+import { confidenceFor } from "@/lib/confidence";
 import { AppShell, WalletButton } from "@/components/navigation";
 import { ConfirmModal, ServiceCard } from "@/components/ui";
 import { useStore } from "@/components/store";
-import { categories } from "@/data/mock";
-import { Category, Service } from "@/lib/types";
-import { defaultBond, minBond, usdc } from "@/lib/utils";
+import { RoleGate } from "@/components/role-gate";
+import { categories, Category, Service } from "@/lib/types";
+import {
+  defaultBond,
+  durationLabel,
+  maxBond,
+  minBond,
+  shortAddress,
+  usdc,
+} from "@/lib/utils";
 type DraftPlan = {
   id: string;
-  name: string;
   duration: string;
   unit: "minutes" | "days";
   price: string;
 };
-export default function NewService() {
-  const { publishService, wallet, profile } = useStore();
+export default function NewServicePage() {
+  return (
+    <RoleGate need="Provider">
+      <NewService />
+    </RoleGate>
+  );
+}
+function NewService() {
+  const { publishService, wallet, profile, busy } = useStore();
   const router = useRouter();
   const form = useRef<HTMLFormElement>(null);
   const [name, setName] = useState("");
@@ -39,20 +55,8 @@ export default function NewService() {
   const [latency, setLatency] = useState("200");
   const [bond, setBond] = useState(String(defaultBond));
   const [plans, setPlans] = useState<DraftPlan[]>([
-    {
-      id: "demo",
-      name: "5 minute demo",
-      duration: "5",
-      unit: "minutes",
-      price: "10",
-    },
-    {
-      id: "monthly",
-      name: "1 month",
-      duration: "30",
-      unit: "days",
-      price: "120",
-    },
+    { id: "starter", duration: "5", unit: "minutes", price: "1" },
+    { id: "monthly", duration: "30", unit: "days", price: "120" },
   ]);
   const [preview, setPreview] = useState<Service | null>(null);
   const [error, setError] = useState("");
@@ -74,14 +78,30 @@ export default function NewService() {
       );
       return;
     }
-    if (plans.some((p) => !p.name.trim())) {
-      setError("Every plan needs a name.");
+    if ([endpoint, docs].some((v) => v.length > 200)) {
+      setError("URLs can be at most 200 characters.");
+      return;
+    }
+    const minutes = plans.map(
+      (p) => Number(p.duration) * (p.unit === "days" ? 1440 : 1),
+    );
+    if (minutes.some((m) => m < 5 || m > 365 * 1440)) {
+      setError("Each plan must last between 5 minutes and 365 days.");
+      return;
+    }
+    if (plans.some((p) => Number(p.price) < 1)) {
+      setError("Each plan must cost at least 1 USDC.");
+      return;
+    }
+    if (!(Number(bond) >= minBond && Number(bond) <= maxBond)) {
+      setError(`The bond must be between ${usdc(minBond)} and ${usdc(maxBond)}.`);
       return;
     }
     setPreview({
-      id: `custom-${Date.now()}`,
+      id: "preview",
       name: name.trim(),
-      provider: profile.type === "Company" ? profile.name : "Nexus Labs",
+      provider: providerName,
+      providerAddress: wallet ?? "",
       category,
       description: description.trim(),
       tagline: description.trim().slice(0, 90),
@@ -89,10 +109,10 @@ export default function NewService() {
       latency: Number(latency),
       endpoint,
       docs,
-      plans: plans.map((p) => ({
-        id: p.id,
-        name: p.name.trim(),
-        minutes: Number(p.duration) * (p.unit === "days" ? 1440 : 1),
+      plans: plans.map((p, i) => ({
+        id: String(i),
+        name: `${durationLabel(minutes[i])} plan`,
+        minutes: minutes[i],
         price: Number(p.price),
       })),
       color: ["blue", "purple", "peach", "green", "pink", "sand"][
@@ -104,6 +124,22 @@ export default function NewService() {
       bondStatus: "Bonded",
       customers: 0,
     });
+  }
+  const providerName =
+    profile.name || (wallet ? shortAddress(wallet) : "Your wallet");
+  async function publish(service: Service) {
+    const id = await publishService({
+      name: service.name,
+      description: service.description,
+      category: categories.indexOf(service.category),
+      endpoint: service.endpoint,
+      docs: service.docs,
+      uptime: service.uptime,
+      latency: service.latency,
+      bond: service.bond,
+      plans: service.plans.map((p) => ({ price: p.price, minutes: p.minutes })),
+    });
+    if (id) router.push(`/services/${id}`);
   }
   return (
     <AppShell>
@@ -147,7 +183,7 @@ export default function NewService() {
                     required
                     minLength={3}
                     maxLength={60}
-                    placeholder="e.g. Nexus API"
+                    placeholder="e.g. Streamlet API"
                   />
                 </label>
                 <label className="field full-span">
@@ -167,26 +203,22 @@ export default function NewService() {
                     characters
                   </small>
                 </label>
-                <label className="field">
-                  Category
-                  <select
+                <div className="field">
+                  <span>Category</span>
+                  <Select
+                    label="Category"
                     value={category}
-                    onChange={(e) => setCategory(e.target.value as Category)}
-                  >
-                    {categories.map((c) => (
-                      <option key={c}>{c}</option>
-                    ))}
-                  </select>
-                </label>
+                    onChange={setCategory}
+                    options={categories.map((c) => ({ value: c, label: c }))}
+                  />
+                </div>
                 <label className="field">
-                  Provider
+                  Provider wallet
                   <input
-                    value={
-                      profile.type === "Company" ? profile.name : "Nexus Labs"
-                    }
+                    value={wallet ? shortAddress(wallet) : "Not connected"}
                     readOnly
                   />
-                  <small>From your demo provider profile</small>
+                  <small>Payouts and bond refunds go to this wallet</small>
                 </label>
               </div>
             </section>
@@ -209,8 +241,8 @@ export default function NewService() {
                     placeholder="https://api.yourservice.com/health"
                   />
                   <small>
-                    Use a public health endpoint. No requests are sent in this
-                    demo.
+                    A public URL the SLAForge monitor checks for uptime and
+                    latency.
                   </small>
                 </label>
                 <label className="field full-span">
@@ -266,16 +298,24 @@ export default function NewService() {
                     required
                     type="number"
                     min={minBond}
-                    max="1000000"
+                    max={maxBond}
                     step="1"
                     value={bond}
                     onChange={(e) => setBond(e.target.value)}
                   />
                   <small>
-                    Locked while the service is listed. Minimum {usdc(minBond)}.
-                    A larger bond signals more confidence to customers.
+                    Locked while the service is listed. Between {usdc(minBond)}{" "}
+                    and {usdc(maxBond)}. A larger bond earns a higher SLAForge
+                    confidence badge.
                   </small>
                 </label>
+                <div className="full-span">
+                  <ConfidenceMeter
+                    confidence={confidenceFor(Math.min(Number(bond) || 0, maxBond))}
+                    bond={Number(bond) || 0}
+                    audience="provider"
+                  />
+                </div>
               </div>
               <div className="info-box">
                 <ShieldCheck size={18} />
@@ -313,19 +353,7 @@ export default function NewService() {
                       </button>
                     </div>
                     <div className="form-grid">
-                      <label className="field">
-                        Plan name
-                        <input
-                          required
-                          maxLength={40}
-                          value={p.name}
-                          onChange={(e) =>
-                            updatePlan(p.id, "name", e.target.value)
-                          }
-                          placeholder="e.g. Monthly"
-                        />
-                      </label>
-                      <label className="field">
+                      <label className="field full-span">
                         Price (USDC)
                         <input
                           required
@@ -353,18 +381,18 @@ export default function NewService() {
                           }
                         />
                       </label>
-                      <label className="field">
-                        Duration unit
-                        <select
+                      <div className="field">
+                        <span>Duration unit</span>
+                        <Select
+                          label="Duration unit"
                           value={p.unit}
-                          onChange={(e) =>
-                            updatePlan(p.id, "unit", e.target.value)
-                          }
-                        >
-                          <option value="minutes">Minutes</option>
-                          <option value="days">Days</option>
-                        </select>
-                      </label>
+                          onChange={(unit) => updatePlan(p.id, "unit", unit)}
+                          options={[
+                            { value: "minutes", label: "Minutes" },
+                            { value: "days", label: "Days" },
+                          ]}
+                        />
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -378,7 +406,6 @@ export default function NewService() {
                     ...ps,
                     {
                       id: `plan-${Date.now()}`,
-                      name: "",
                       duration: "30",
                       unit: "days",
                       price: "",
@@ -436,8 +463,8 @@ export default function NewService() {
             <div className="aside-note">
               <Info size={16} />
               <p>
-                Publishing saves your service on this device. It becomes
-                available immediately in the demo marketplace.
+                Publishing posts your bond on Arc and lists the service
+                on-chain. SLA targets and plans cannot be changed later.
               </p>
             </div>
           </aside>
@@ -456,20 +483,26 @@ export default function NewService() {
             </p>
             <p className="body-copy">{preview.description}</p>
             {wallet ? (
-              <button
-                className="button button-dark full-width"
-                onClick={() => {
-                  publishService(preview);
-                  router.push(`/services/${preview.id}`);
-                }}
-              >
-                Post {usdc(preview.bond)} bond & publish{" "}
-                <ArrowRight size={16} />
-              </button>
+              <>
+                <button
+                  className="button button-dark full-width"
+                  disabled={busy}
+                  onClick={() => publish(preview)}
+                >
+                  {busy
+                    ? "Waiting for your wallet…"
+                    : `Post ${usdc(preview.bond)} bond & publish`}{" "}
+                  <ArrowRight size={16} />
+                </button>
+                <p className="secure-note">
+                  Your wallet asks you to approve {usdc(preview.bond)}, then
+                  to confirm the listing.
+                </p>
+              </>
             ) : (
               <>
                 <p className="helper">
-                  Connect the simulated wallet to publish your service.
+                  Connect your wallet to publish your service.
                 </p>
                 <WalletButton full />
               </>

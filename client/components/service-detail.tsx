@@ -3,18 +3,20 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
-  Activity,
   ArrowLeft,
   ArrowRight,
   BookOpen,
   Check,
-  Clock3,
   ExternalLink,
   Globe2,
   Info,
   LockKeyhole,
+  Repeat2,
   ShieldCheck,
+  ShieldPlus,
 } from "lucide-react";
+import { LatencyIcon, MonitorIcon, UptimeIcon } from "./icons";
+import { NETWORK_NAME } from "@/lib/web3/config";
 import { AppShell, WalletButton } from "./navigation";
 import {
   ConfirmModal,
@@ -25,13 +27,28 @@ import {
   StatusBadge,
 } from "./ui";
 import { useStore } from "./store";
-import { platformFee, usdc } from "@/lib/utils";
+import { ConfidenceBadge, ConfidenceMeter, ConfidenceScore } from "./confidence";
+import { serviceConfidence } from "@/lib/confidence";
+import { maxBond, platformFee, sameAddress, usdc } from "@/lib/utils";
+import { TopUpModal } from "./top-up";
 export function ServiceDetail({ id }: { id: string }) {
-  const { services, ready, wallet, createAgreement } = useStore();
+  const {
+    services,
+    ready,
+    wallet,
+    busy,
+    balance,
+    role,
+    registered,
+    createAgreement,
+    switchRole,
+    openOnboarding,
+  } = useStore();
   const router = useRouter();
-  const [planId, setPlanId] = useState("demo");
+  const [planId, setPlanId] = useState("0");
   const [modal, setModal] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
+  const [topUpOpen, setTopUpOpen] = useState(false);
   const s = services.find((v) => v.id === id);
   if (!ready)
     return (
@@ -52,6 +69,16 @@ export function ServiceDetail({ id }: { id: string }) {
       </AppShell>
     );
   const plan = s.plans.find((p) => p.id === planId) ?? s.plans[0];
+  const ownService = sameAddress(s.providerAddress, wallet);
+  const confidence = serviceConfidence(s);
+  // Only customer accounts buy plans, and never from their own service.
+  const blocked = ownService
+    ? "own"
+    : role === "Provider"
+      ? "provider"
+      : wallet && registered === false
+        ? "unregistered"
+        : null;
   return (
     <AppShell>
       <div id="main-content">
@@ -61,22 +88,25 @@ export function ServiceDetail({ id }: { id: string }) {
         </Link>
         <div className="service-detail-heading">
           <ServiceMark service={s} />
-          <div>
+          <div className="service-detail-title">
             <h1>{s.name}</h1>
             <p>
-              by {s.provider} <ShieldCheck size={15} /> · {s.customers} demo
-              customers
+              by {s.provider} <ShieldCheck size={15} /> · {s.customers} active
+              agreement{s.customers === 1 ? "" : "s"}
             </p>
+            <div className="service-detail-badges">
+              <StatusBadge
+                status={
+                  s.bondStatus !== "Bonded"
+                    ? s.bondStatus
+                    : s.online
+                      ? "Online"
+                      : "Offline"
+                }
+              />
+            </div>
           </div>
-          <StatusBadge
-            status={
-              s.bondStatus !== "Bonded"
-                ? s.bondStatus
-                : s.online
-                  ? "Online"
-                  : "Offline"
-            }
-          />
+          <ConfidenceScore confidence={confidence} bond={s.bond} />
         </div>
         <div className="detail-grid">
           <div className="detail-main">
@@ -93,7 +123,9 @@ export function ServiceDetail({ id }: { id: string }) {
                 </span>
                 <span>
                   <Check size={16} />
-                  {usdc(s.bond)} service bond
+                  {s.bondStatus === "Bonded"
+                    ? `${usdc(s.bond)} service bond`
+                    : "Bond-backed service"}
                 </span>
                 <span>
                   <Check size={16} />
@@ -110,16 +142,44 @@ export function ServiceDetail({ id }: { id: string }) {
                   Health endpoint
                 </span>
                 <code>{s.endpoint}</code>
-                <small>Illustrative endpoint · No requests are sent</small>
+                <small>Checked by the SLAForge monitor</small>
               </div>
               <div className="docs-block">
                 <BookOpen size={19} />
                 <div>
                   <strong>Service documentation</strong>
-                  <code>{s.docs}</code>
-                  <small>Sample documentation URL for this demo service</small>
+                  <a
+                    className="text-link"
+                    href={s.docs}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <code>{s.docs}</code>
+                    <ExternalLink size={13} />
+                  </a>
+                  <small>Published by the provider</small>
                 </div>
               </div>
+            </section>
+            <section className="panel">
+              <div className="panel-heading">
+                <h2>How much is behind this promise.</h2>
+                <ConfidenceBadge confidence={confidence} />
+              </div>
+              <ConfidenceMeter
+                confidence={confidence}
+                bond={s.bond}
+                audience={ownService ? "provider" : "customer"}
+              />
+              {ownService && s.bondStatus === "Bonded" && s.bond < maxBond && (
+                <button
+                  className="button button-dark confidence-top-up"
+                  onClick={() => setTopUpOpen(true)}
+                >
+                  <ShieldPlus size={16} />
+                  Top up bond
+                </button>
+              )}
             </section>
             <section className="panel">
               <div className="panel-heading">
@@ -131,7 +191,7 @@ export function ServiceDetail({ id }: { id: string }) {
               </p>
               <div className="sla-targets">
                 <div>
-                  <Activity size={20} />
+                  <UptimeIcon size={20} />
                   <small>MINIMUM UPTIME</small>
                   <strong>
                     {s.uptime}
@@ -140,7 +200,7 @@ export function ServiceDetail({ id }: { id: string }) {
                   <p>Successful health checks</p>
                 </div>
                 <div>
-                  <Clock3 size={20} />
+                  <LatencyIcon size={20} />
                   <small>MAXIMUM P95 LATENCY</small>
                   <strong>
                     {s.latency}
@@ -160,24 +220,28 @@ export function ServiceDetail({ id }: { id: string }) {
             <section className="panel">
               <div className="panel-heading">
                 <h2>Monitoring, made visible.</h2>
-                <Activity size={19} />
+                <MonitorIcon size={19} />
               </div>
               <div className="monitoring-features">
                 <div>
                   <span>01</span>
-                  <strong>Checks every 30 seconds</strong>
-                  <p>Scheduled health and response time measurements.</p>
+                  <strong>Continuous health checks</strong>
+                  <p>The monitor measures uptime and p95 response time.</p>
                 </div>
                 <div>
                   <span>02</span>
-                  <strong>Multi-region visibility</strong>
-                  <p>Sample checks from Mumbai, Frankfurt, and Virginia.</p>
+                  <strong>Settled automatically</strong>
+                  <p>
+                    No one decides by hand: the monitor settles each agreement
+                    on Arc.
+                  </p>
                 </div>
                 <div>
                   <span>03</span>
-                  <strong>An auditable timeline</strong>
+                  <strong>An auditable outcome</strong>
                   <p>
-                    Check history, SLA trends, and a final settlement breakdown.
+                    Every payment, refund, and slashed bond is a public
+                    transaction.
                   </p>
                 </div>
               </div>
@@ -213,19 +277,63 @@ export function ServiceDetail({ id }: { id: string }) {
                   <dd>{usdc(plan.price + platformFee)}</dd>
                 </div>
               </dl>
-              <div className="bond-note">
-                <ShieldCheck size={17} />
-                <span>
-                  {s.provider} has locked a <strong>{usdc(s.bond)}</strong> bond
-                  on this service. It is slashed if the SLA is missed.
-                </span>
-              </div>
+              {s.bondStatus === "Bonded" && (
+                <div className="bond-note">
+                  <ShieldCheck size={17} />
+                  <span>
+                    {s.provider} has locked a <strong>{usdc(s.bond)}</strong>{" "}
+                    bond on this service ({confidence.tier},{" "}
+                    {confidence.score}% confidence). It is slashed if the SLA
+                    is missed.
+                  </span>
+                </div>
+              )}
               {s.bondStatus !== "Bonded" ? (
                 <p className="helper warning">
                   {s.bondStatus === "Slashed"
                     ? "This service is suspended. Its bond was slashed after an SLA breach, and it reopens once the provider posts a new bond."
                     : "This service has been delisted by its provider."}
                 </p>
+              ) : blocked === "own" ? (
+                <div className="buy-blocked">
+                  <ShieldCheck size={18} />
+                  <div>
+                    <strong>This is your service.</strong>
+                    <p>
+                      Providers can&apos;t buy their own services. Manage it
+                      from your workspace.
+                    </p>
+                    <Link className="button button-outline button-sm" href="/dashboard/provider">
+                      Open provider workspace <ArrowRight size={14} />
+                    </Link>
+                  </div>
+                </div>
+              ) : blocked === "provider" ? (
+                <div className="buy-blocked">
+                  <Info size={18} />
+                  <div>
+                    <strong>Provider accounts can&apos;t buy services.</strong>
+                    <p>
+                      Switch to a customer account to create agreements. You
+                      can switch back any time.
+                    </p>
+                    <button
+                      className="button button-dark button-sm"
+                      disabled={busy}
+                      onClick={() => switchRole("Customer")}
+                    >
+                      <Repeat2 size={14} />
+                      {busy ? "Check your wallet…" : "Switch to customer"}
+                    </button>
+                  </div>
+                </div>
+              ) : blocked === "unregistered" ? (
+                <button
+                  className="button button-dark full-width"
+                  onClick={openOnboarding}
+                >
+                  Create your profile to continue <ArrowRight size={16} />
+                </button>
               ) : wallet ? (
                 <button
                   className="button button-dark full-width"
@@ -241,14 +349,10 @@ export function ServiceDetail({ id }: { id: string }) {
               )}
               <p className="secure-note">
                 <LockKeyhole size={12} />
-                Simulated USDC · No real payment
+                {wallet && balance
+                  ? `Paid in USDC on ${NETWORK_NAME} · Balance ${usdc(balance.wallet)}`
+                  : `Paid in USDC on ${NETWORK_NAME}`}
               </p>
-              {!s.online && (
-                <p className="helper warning">
-                  This service is currently degraded. Review its demo
-                  performance before subscribing.
-                </p>
-              )}
             </section>
             <div className="aside-note">
               <Info size={16} />
@@ -263,11 +367,12 @@ export function ServiceDetail({ id }: { id: string }) {
               target="_blank"
               rel="noreferrer"
             >
-              Designed for Arc Mainnet <ExternalLink size={13} />
+              Settled on {NETWORK_NAME} <ExternalLink size={13} />
             </a>
           </aside>
         </div>
-        {modal && (
+        {topUpOpen && <TopUpModal service={s} onClose={() => setTopUpOpen(false)} />}
+        {modal && !blocked && (
           <ConfirmModal
             title="Review your agreement"
             onClose={() => setModal(false)}
@@ -314,17 +419,20 @@ export function ServiceDetail({ id }: { id: string }) {
             </label>
             <button
               className="button button-dark full-width"
-              disabled={!confirmed}
-              onClick={() => {
-                const agreementId = createAgreement(s, plan.id);
+              disabled={!confirmed || busy}
+              onClick={async () => {
+                const agreementId = await createAgreement(s.id, plan.id);
+                if (!agreementId) return;
                 setModal(false);
                 router.push(`/agreements/${agreementId}`);
               }}
             >
-              Fund agreement & start <ArrowRight size={16} />
+              {busy ? "Waiting for your wallet…" : "Fund agreement & start"}{" "}
+              <ArrowRight size={16} />
             </button>
             <p className="secure-note">
-              No blockchain transaction will be submitted.
+              Your wallet asks you to approve {usdc(plan.price + platformFee)},
+              then to confirm the agreement.
             </p>
           </ConfirmModal>
         )}

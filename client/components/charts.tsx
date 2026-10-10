@@ -3,15 +3,13 @@ import {
   Area,
   AreaChart,
   CartesianGrid,
-  Line,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
-  ComposedChart,
 } from "recharts";
-import { history } from "@/data/mock";
+import { history } from "@/data/showcase";
 export function PerformanceChart({
   type = "latency",
   failed = false,
@@ -105,54 +103,6 @@ export function PerformanceChart({
             isAnimationActive={false}
           />
         </AreaChart>
-      </ResponsiveContainer>
-    </div>
-  );
-}
-export function VolumeChart() {
-  return (
-    <div
-      className="chart"
-      role="img"
-      aria-label="Simulated payment volume over seven months"
-    >
-      <ResponsiveContainer width="100%" height="100%" minWidth={0}>
-        <ComposedChart
-          data={[
-            { month: "Apr", volume: 1200 },
-            { month: "May", volume: 2400 },
-            { month: "Jun", volume: 1900 },
-            { month: "Jul", volume: 3800 },
-            { month: "Aug", volume: 3100 },
-            { month: "Sep", volume: 5400 },
-            { month: "Oct", volume: 6250 },
-          ]}
-          margin={{ left: -15, right: 10, top: 12 }}
-        >
-          <CartesianGrid vertical={false} stroke="#edf0f5" />
-          <XAxis
-            dataKey="month"
-            axisLine={false}
-            tickLine={false}
-            tick={{ fill: "#8b94a5", fontSize: 11 }}
-          />
-          <YAxis
-            axisLine={false}
-            tickLine={false}
-            tick={{ fill: "#8b94a5", fontSize: 10 }}
-            tickFormatter={(v) => `${v / 1000}k`}
-          />
-          <Tooltip formatter={(v) => [`${v} USDC`, "Volume"]} />
-          <Area dataKey="volume" fill="#eaf1fb" stroke="none" />
-          <Line
-            type="monotone"
-            dataKey="volume"
-            stroke="#547aaa"
-            strokeWidth={2}
-            dot={{ r: 4, fill: "#fff" }}
-            isAnimationActive={false}
-          />
-        </ComposedChart>
       </ResponsiveContainer>
     </div>
   );

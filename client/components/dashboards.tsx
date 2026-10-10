@@ -2,7 +2,6 @@
 import Link from "next/link";
 import { useState } from "react";
 import {
-  Activity,
   ArrowUpRight,
   CircleDollarSign,
   Handshake,
@@ -11,10 +10,13 @@ import {
   ArrowDownLeft,
   Search,
   ShieldCheck,
+  ShieldPlus,
   Users,
   Wallet,
   X,
 } from "lucide-react";
+import { ScoreIcon } from "./icons";
+import { NETWORK_NAME } from "@/lib/web3/config";
 import { AppShell, WalletButton } from "./navigation";
 import { useStore } from "./store";
 import {
@@ -27,14 +29,26 @@ import {
   ServiceMark,
   StatusBadge,
 } from "./ui";
-import { minBond, shortAddress, usdc } from "@/lib/utils";
+import { maxBond, minBond, sameAddress, shortAddress, usdc } from "@/lib/utils";
+import { confidenceFor, serviceConfidence } from "@/lib/confidence";
+import { ConfidenceBadge, ConfidenceMeter } from "./confidence";
+import { TopUpModal } from "./top-up";
 import { Service, Status } from "@/lib/types";
-import { VolumeChart } from "./charts";
 const statuses: ("All" | Status)[] = ["All", "Active", "Passed", "Failed"];
 export function CustomerDashboard() {
-  const { agreements, services, wallet, profile, ready } = useStore();
+  const {
+    agreements: all,
+    services,
+    wallet,
+    profile,
+    ready,
+    balance,
+    busy,
+    withdraw,
+  } = useStore();
   const [status, setStatus] = useState<string>("All");
   const [search, setSearch] = useState("");
+  const agreements = all.filter((a) => sameAddress(a.customer, wallet));
   const active = agreements.filter((a) => a.status === "Active");
   const committed = active.reduce((n, a) => n + a.price, 0);
   const refunds = agreements
@@ -45,7 +59,7 @@ export function CustomerDashboard() {
   const filtered = agreements.filter(
     (a) =>
       (status === "All" || a.status === status) &&
-      `${a.id} ${services.find((s) => s.id === a.serviceId)?.name}`
+      `#${a.id} ${services.find((s) => s.id === a.serviceId)?.name}`
         .toLowerCase()
         .includes(search.toLowerCase()),
   );
@@ -56,8 +70,8 @@ export function CustomerDashboard() {
           <div>
             <h1>A clear view of your agreements.</h1>
             <p>
-              Welcome, {profile.name.split(" ")[0]}. Track the performance
-              behind every payment.
+              {profile.name ? `Welcome, ${profile.name.split(" ")[0]}. ` : ""}
+              Track the performance behind every payment.
             </p>
           </div>
           <Link className="button button-dark" href="/services">
@@ -69,7 +83,7 @@ export function CustomerDashboard() {
             <Wallet size={21} />
           </span>
           <div>
-            <small>YOUR DEMO WALLET</small>
+            <small>YOUR WALLET</small>
             <strong>
               {wallet ? shortAddress(wallet) : "Connect to create agreements"}
             </strong>
@@ -78,9 +92,27 @@ export function CustomerDashboard() {
             <>
               <CopyButton value={wallet} label="Copy wallet address" />
               <span className="wallet-balance">
-                <small>AVAILABLE DEMO BALANCE</small>
-                <strong>2,450.00 USDC</strong>
+                <small>USDC BALANCE</small>
+                <strong>{balance ? usdc(balance.wallet) : "…"}</strong>
               </span>
+              {!!balance?.claimable && (
+                <span className="wallet-balance">
+                  <small>REFUNDS TO WITHDRAW</small>
+                  <strong>{usdc(balance.claimable)}</strong>
+                </span>
+              )}
+              {!!balance?.claimable && (
+                <button
+                  className="button button-dark button-sm"
+                  disabled={busy}
+                  onClick={() => withdraw()}
+                >
+                  Withdraw
+                </button>
+              )}
+              <Link className="button button-outline button-sm" href="/payments">
+                Payments <ArrowUpRight size={14} />
+              </Link>
             </>
           ) : (
             <WalletButton />
@@ -109,7 +141,7 @@ export function CustomerDashboard() {
             label="SLAs kept"
             value={settled.length ? `${kept}/${settled.length}` : "—"}
             note="Settled agreements that met the SLA"
-            icon={<Activity size={17} />}
+            icon={<ScoreIcon size={17} />}
           />
         </div>
         <div className="dashboard-grid dashboard-grid-full">
@@ -166,6 +198,11 @@ export function CustomerDashboard() {
             </div>
             {!ready ? (
               <LoadingSkeleton />
+            ) : !wallet ? (
+              <EmptyState
+                title="Connect your wallet"
+                description="Your agreements are linked to your wallet. Connect it to see them."
+              />
             ) : filtered.length ? (
               filtered.map((a) => (
                 <AgreementCard
@@ -187,21 +224,23 @@ export function CustomerDashboard() {
   );
 }
 type BondAction = { service: Service; type: "rebond" | "delist" };
-export function ProviderDashboard({
-  initialProvider = "Nexus Labs",
-}: {
-  initialProvider?: string;
-}) {
-  const { agreements, services, wallet, ready, rebond, delist } = useStore();
+export function ProviderDashboard() {
+  const {
+    agreements,
+    services,
+    wallet,
+    ready,
+    balance,
+    busy,
+    rebond,
+    delist,
+    withdraw,
+  } = useStore();
   const [action, setAction] = useState<BondAction | null>(null);
+  const [topUp, setTopUp] = useState<Service | null>(null);
   const [amount, setAmount] = useState("");
   const [tab, setTab] = useState("Services");
-  const [provider, setProvider] = useState(initialProvider);
-  const providers = [...new Set(services.map((s) => s.provider))];
-  const selectedProvider = providers.includes(provider)
-    ? provider
-    : "Nexus Labs";
-  const owned = services.filter((s) => s.provider === selectedProvider);
+  const owned = services.filter((s) => sameAddress(s.providerAddress, wallet));
   const ids = new Set(owned.map((s) => s.id));
   const mine = agreements.filter((a) => ids.has(a.serviceId));
   const active = mine.filter((a) => a.status === "Active");
@@ -213,9 +252,10 @@ export function ProviderDashboard({
     .filter((s) => s.bondStatus === "Bonded")
     .reduce((n, s) => n + s.bond, 0);
   const bondAmount = Number(amount);
-  const validBond = Number.isFinite(bondAmount) && bondAmount >= minBond;
+  const validBond =
+    Number.isFinite(bondAmount) && bondAmount >= minBond && bondAmount <= maxBond;
   function open(service: Service, type: BondAction["type"]) {
-    setAmount(String(service.bond));
+    setAmount(String(service.bond || 50));
     setAction({ service, type });
   }
   return (
@@ -229,21 +269,6 @@ export function ProviderDashboard({
           <Link className="button button-dark" href="/provider/services/new">
             List a service <Plus size={16} />
           </Link>
-        </div>
-        <div className="provider-switcher">
-          <span>Explore a demo provider workspace</span>
-          <label>
-            Provider
-            <select
-              aria-label="Select provider workspace"
-              value={selectedProvider}
-              onChange={(e) => setProvider(e.target.value)}
-            >
-              {providers.map((p) => (
-                <option key={p}>{p}</option>
-              ))}
-            </select>
-          </label>
         </div>
         <div className="metric-grid">
           <MetricCard
@@ -278,7 +303,7 @@ export function ProviderDashboard({
                 ? `${settled.length} settled agreements`
                 : "No completed agreements yet"
             }
-            icon={<Activity size={17} />}
+            icon={<ScoreIcon size={17} />}
           />
         </div>
         <div className="tabs workspace-tabs">
@@ -292,7 +317,7 @@ export function ProviderDashboard({
             className={tab === "Settlements" ? "selected" : ""}
             onClick={() => setTab("Settlements")}
           >
-            Settlements
+            Settlements <span>{settled.length}</span>
           </button>
         </div>
         <div className="dashboard-grid">
@@ -303,43 +328,82 @@ export function ProviderDashboard({
                   ? "Your services and bonds"
                   : "Recent settlements"}
               </h2>
-              <span className="muted-label">{selectedProvider} demo</span>
+              {wallet && (
+                <span className="muted-label">{shortAddress(wallet)}</span>
+              )}
             </div>
             {!ready ? (
               <LoadingSkeleton />
+            ) : !wallet ? (
+              <>
+                <EmptyState
+                  title="Connect your provider wallet"
+                  description="Your services and bonds are linked to the wallet that listed them."
+                />
+                <WalletButton />
+              </>
             ) : tab === "Services" ? (
-              owned.map((s) => (
-                <div className="bond-row" key={s.id}>
-                  <ServiceMark service={s} />
-                  <div>
-                    <Link href={`/services/${s.id}`}>
-                      {s.name} <ArrowUpRight size={14} />
-                    </Link>
-                    <small>
-                      {usdc(s.bond)} bond · {s.uptime}% uptime · ≤ {s.latency}ms
-                      p95
-                    </small>
+              owned.length ? (
+                owned.map((s) => (
+                  <div className="bond-row" key={s.id}>
+                    <ServiceMark service={s} />
+                    <div>
+                      <Link href={`/services/${s.id}`}>
+                        {s.name} <ArrowUpRight size={14} />
+                      </Link>
+                      <small>
+                        {usdc(s.bond)} bond · {s.uptime}% uptime · ≤{" "}
+                        {s.latency}ms p95 · {s.customers} active
+                      </small>
+                    </div>
+                    <span className="bond-row-badges">
+                      <ConfidenceBadge confidence={serviceConfidence(s)} />
+                      <StatusBadge status={s.bondStatus} />
+                    </span>
+                    {s.bondStatus === "Bonded" ? (
+                      <span className="bond-row-actions">
+                        {s.bond < maxBond && (
+                          <button
+                            className="button button-dark button-sm"
+                            onClick={() => setTopUp(s)}
+                          >
+                            <ShieldPlus size={14} />
+                            Top up
+                          </button>
+                        )}
+                        <button
+                          className="button button-outline button-sm"
+                          onClick={() => open(s, "delist")}
+                        >
+                          <LogOut size={14} />
+                          Delist
+                        </button>
+                      </span>
+                    ) : (
+                      <button
+                        className="button button-dark button-sm"
+                        onClick={() => open(s, "rebond")}
+                      >
+                        <ShieldCheck size={14} />
+                        {s.bondStatus === "Slashed" ? "Post bond" : "Relist"}
+                      </button>
+                    )}
                   </div>
-                  <StatusBadge status={s.bondStatus} />
-                  {s.bondStatus === "Bonded" ? (
-                    <button
-                      className="button button-outline button-sm"
-                      onClick={() => open(s, "delist")}
-                    >
-                      <LogOut size={14} />
-                      Delist
-                    </button>
-                  ) : (
-                    <button
-                      className="button button-dark button-sm"
-                      onClick={() => open(s, "rebond")}
-                    >
-                      <ShieldCheck size={14} />
-                      {s.bondStatus === "Slashed" ? "Post bond" : "Relist"}
-                    </button>
-                  )}
-                </div>
-              ))
+                ))
+              ) : (
+                <>
+                  <EmptyState
+                    title="No services yet"
+                    description="List your first service and post a bond to start earning."
+                  />
+                  <Link
+                    className="button button-dark"
+                    href="/provider/services/new"
+                  >
+                    List a service <Plus size={16} />
+                  </Link>
+                </>
+              )
             ) : settled.length ? (
               settled.map((a) => {
                 const service = services.find((s) => s.id === a.serviceId);
@@ -347,7 +411,7 @@ export function ProviderDashboard({
                   <div className="settlement-row" key={a.id}>
                     <Link href={`/agreements/${a.id}`}>
                       <strong>{service?.name}</strong>
-                      <small>{a.id}</small>
+                      <small>Agreement #{a.id}</small>
                     </Link>
                     <StatusBadge status={a.status} />
                     <div>
@@ -356,7 +420,7 @@ export function ProviderDashboard({
                       </strong>
                       <small>
                         {a.status === "Failed"
-                          ? `Customer refunded · ${usdc(service?.bond ?? 0)} bond slashed`
+                          ? "Customer refunded · bond slashed"
                           : "Service payout"}
                       </small>
                     </div>
@@ -373,14 +437,31 @@ export function ProviderDashboard({
           <aside className="dashboard-aside">
             <section className="panel">
               <div className="panel-heading">
-                <h2>Payment activity</h2>
-                <span className="tiny-tag">SAMPLE</span>
+                <h2>Your earnings</h2>
+                <CircleDollarSign size={18} />
               </div>
               <div className="chart-total">
-                6,250 <span>USDC</span>
+                {(balance?.claimable ?? 0).toLocaleString("en-US", {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 6,
+                })}{" "}
+                <span>USDC</span>
               </div>
-              <p className="helper">Illustrative platform volume · Monthly</p>
-              <VolumeChart />
+              <p className="helper">
+                Payouts from met SLAs are credited to the contract. Withdraw
+                them to your wallet at any time.
+              </p>
+              <button
+                className="button button-dark full-width"
+                disabled={!balance?.claimable || busy}
+                onClick={() => withdraw()}
+              >
+                <ArrowDownLeft size={16} />
+                {balance?.claimable ? "Withdraw to wallet" : "Nothing to withdraw"}
+              </button>
+              <Link className="text-link earnings-history-link" href="/payments">
+                Payment history <ArrowUpRight size={14} />
+              </Link>
             </section>
             <section className="bond-education">
               <ShieldCheck size={25} />
@@ -389,11 +470,13 @@ export function ProviderDashboard({
                 Every listed service is backed by a bond you choose. Miss an SLA
                 and the full bond is slashed to the platform treasury, and the
                 service is suspended until you post a new bond. Delist any time
-                no agreements are active to get your bond back.
+                no agreements are active to get your bond back. Top up any time, up to
+                100 USDC, to raise your confidence badge.
               </p>
             </section>
           </aside>
         </div>
+        {topUp && <TopUpModal service={topUp} onClose={() => setTopUp(null)} />}
         {action && (
           <ConfirmModal
             title={
@@ -409,6 +492,13 @@ export function ProviderDashboard({
                   The service leaves the marketplace and your bond is returned
                   to your wallet. You can relist it later by posting a new bond.
                 </p>
+                {action.service.customers > 0 && (
+                  <p className="helper warning">
+                    This service has {action.service.customers} active
+                    agreement{action.service.customers === 1 ? "" : "s"}. You
+                    can delist once they settle.
+                  </p>
+                )}
                 <dl className="detail-list">
                   <div className="total-row">
                     <dt>Bond refunded to you</dt>
@@ -417,12 +507,13 @@ export function ProviderDashboard({
                 </dl>
                 <button
                   className="button button-danger full-width"
-                  onClick={() => {
-                    if (delist(action.service.id)) setAction(null);
+                  disabled={busy || action.service.customers > 0}
+                  onClick={async () => {
+                    if (await delist(action.service.id)) setAction(null);
                   }}
                 >
                   <LogOut size={16} />
-                  Delist & refund bond
+                  {busy ? "Waiting for your wallet…" : "Delist & refund bond"}
                 </button>
               </>
             ) : (
@@ -437,39 +528,38 @@ export function ProviderDashboard({
                   <input
                     type="number"
                     min={minBond}
+                    max={maxBond}
                     step="1"
                     value={amount}
                     onChange={(e) => setAmount(e.target.value)}
                   />
                   <small>
-                    Minimum {usdc(minBond)}. The full bond is slashed if an SLA
-                    is missed.
+                    Between {usdc(minBond)} and {usdc(maxBond)}. The full bond is
+                    slashed if an SLA is missed.
                   </small>
                 </label>
-                {wallet ? (
-                  <button
-                    className="button button-dark full-width"
-                    disabled={!validBond}
-                    onClick={() => {
-                      rebond(action.service.id, bondAmount);
+                <ConfidenceMeter
+                  confidence={confidenceFor(Math.min(bondAmount || 0, maxBond))}
+                  bond={bondAmount || 0}
+                  audience="provider"
+                />
+                <button
+                  className="button button-dark full-width"
+                  disabled={!validBond || busy}
+                  onClick={async () => {
+                    if (await rebond(action.service.id, bondAmount))
                       setAction(null);
-                    }}
-                  >
-                    <ShieldCheck size={16} />
-                    Post {validBond ? usdc(bondAmount) : "bond"} & relist
-                  </button>
-                ) : (
-                  <>
-                    <p className="helper">
-                      Connect the demo wallet to post a simulated bond.
-                    </p>
-                    <WalletButton full />
-                  </>
-                )}
+                  }}
+                >
+                  <ShieldCheck size={16} />
+                  {busy
+                    ? "Waiting for your wallet…"
+                    : `Post ${validBond ? usdc(bondAmount) : "bond"} & relist`}
+                </button>
               </>
             )}
             <p className="secure-note">
-              Simulated funds · No onchain transaction
+              Your wallet asks you to confirm on {NETWORK_NAME}
             </p>
           </ConfirmModal>
         )}

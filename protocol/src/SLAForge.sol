@@ -28,6 +28,8 @@ contract SLAForge is Ownable2Step, Pausable, ReentrancyGuard {
     error InvalidUptimeTarget();
     error InvalidLatencyTarget();
     error BondTooLow();
+    error BondTooHigh();
+    error ZeroAmount();
     error InvalidPlanCount();
     error InvalidPlanPrice();
     error InvalidPlanDuration();
@@ -47,7 +49,8 @@ contract SLAForge is Ownable2Step, Pausable, ReentrancyGuard {
 
     uint256 public constant USDC_UNIT = 1_000_000; // 1 USDC (6 decimals) (1e6)
     uint256 public constant PLATFORM_FEE = 100_000; // 0.1 USDC
-    uint256 public constant MIN_BOND = 10_000_000; // 10 USDC
+    uint256 public constant MIN_BOND = 1_000_000; // 1 USDC
+    uint256 public constant MAX_BOND = 100_000_000; // 100 USDC
     uint256 public constant MIN_PLAN_PRICE = 1_000_000; // 1 USDC
 
     uint256 public constant MAX_PLANS = 6;
@@ -139,6 +142,8 @@ contract SLAForge is Ownable2Step, Pausable, ReentrancyGuard {
 
     event ServiceRebonded(uint256 indexed serviceId, address indexed provider, uint256 bond);
 
+    event BondIncreased(uint256 indexed serviceId, address indexed provider, uint256 amount, uint256 newBond);
+
     event ServiceDelisted(uint256 indexed serviceId, address indexed provider, uint256 bondRefunded);
 
     event AgreementCreated(
@@ -215,6 +220,7 @@ contract SLAForge is Ownable2Step, Pausable, ReentrancyGuard {
         if (_uptimeBps < MIN_UPTIME_BPS || _uptimeBps > MAX_UPTIME_BPS) revert InvalidUptimeTarget();
         if (_maxLatencyMs == 0 || _maxLatencyMs > MAX_LATENCY_MS) revert InvalidLatencyTarget();
         if (_bond < MIN_BOND) revert BondTooLow();
+        if (_bond > MAX_BOND) revert BondTooHigh();
 
         uint256 planCount = _plans.length;
         if (planCount == 0 || planCount > MAX_PLANS) revert InvalidPlanCount();
@@ -265,6 +271,7 @@ contract SLAForge is Ownable2Step, Pausable, ReentrancyGuard {
         if (service.provider != msg.sender) revert NotServiceProvider();
         if (service.status == ServiceStatus.Bonded) revert ServiceAlreadyBonded();
         if (_bond < MIN_BOND) revert BondTooLow();
+        if (_bond > MAX_BOND) revert BondTooHigh();
 
         service.status = ServiceStatus.Bonded;
         service.bond = _bond;
@@ -272,6 +279,27 @@ contract SLAForge is Ownable2Step, Pausable, ReentrancyGuard {
         USDC.safeTransferFrom(msg.sender, address(this), _bond);
 
         emit ServiceRebonded(_serviceId, msg.sender, _bond);
+    }
+
+    /**
+     * @notice Adds to the bond of a live service, up to MAX_BOND
+     * @dev Works while agreements are active. Provider must approve `_amount` USDC first.
+     */
+    function increaseBond(uint256 _serviceId, uint256 _amount) external whenNotPaused nonReentrant {
+        ServiceStruct storage service = services[_serviceId];
+
+        if (service.status == ServiceStatus.None) revert ServiceNotFound();
+        if (service.provider != msg.sender) revert NotServiceProvider();
+        if (service.status != ServiceStatus.Bonded) revert ServiceNotBonded();
+        if (_amount == 0) revert ZeroAmount();
+
+        uint256 newBond = service.bond + _amount;
+        if (newBond > MAX_BOND) revert BondTooHigh();
+        service.bond = newBond;
+
+        USDC.safeTransferFrom(msg.sender, address(this), _amount);
+
+        emit BondIncreased(_serviceId, msg.sender, _amount, newBond);
     }
 
     /**

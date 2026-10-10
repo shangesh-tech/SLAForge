@@ -18,6 +18,8 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { Eyebrow } from "@/components/ui";
+import { ConfidenceBadge } from "@/components/confidence";
+import { confidenceFor } from "@/lib/confidence";
 import {
   JourneyCarousel,
   SettlementExperience,
@@ -25,6 +27,7 @@ import {
 import { Reveal } from "@/components/motion";
 import { PerformanceChart } from "@/components/charts";
 import { Footer } from "@/components/navigation";
+import { explorerAddress, SLAFORGE_ADDRESS } from "@/lib/web3/config";
 const faqs = [
   {
     q: "What is a performance-backed payment?",
@@ -39,8 +42,8 @@ const faqs = [
     a: "APIs, RPC endpoints, AI inference services, cloud tools, data feeds, and storage services with a measurable health endpoint. Providers choose uptime and maximum p95 latency guarantees for their plans.",
   },
   {
-    q: "Can I try the complete flow?",
-    a: "Yes. Connect the simulated wallet, select a service and plan, and create an agreement. It starts right away, so you can explore monitoring and settlement. In the provider workspace you can re-bond or delist services. Data is saved in your browser; no real USDC moves.",
+    q: "How do I get started?",
+    a: "Connect a browser wallet such as MetaMask or Rabby and hold some USDC on Arc. Then buy a plan or list your own service. Every payment, bond, refund, and withdrawal is an on-chain USDC transaction on Arc, and network fees are paid in USDC too.",
   },
 ];
 export default function Home() {
@@ -129,17 +132,17 @@ export default function Home() {
                     <span className="console-dot" />
                     AN AGREEMENT THAT HOLDS UP
                   </span>
-                  <span className="console-demo">
-                    INTERACTIVE DEMO <i className="live-dot" />
+                  <span className="console-network">
+                    SETTLED IN USDC ON ARC <i className="live-dot" />
                   </span>
                 </div>
                 <div className="console-body">
                   <div className="console-agreement">
                     <div className="console-brand">
-                      <div className="service-mark blue">N</div>
+                      <div className="service-mark blue">S</div>
                       <div>
-                        <strong>Nexus API</strong>
-                        <small>Production API infrastructure</small>
+                        <strong>Streamlet API</strong>
+                        <small>Video, image & document delivery</small>
                       </div>
                       <span className="status status-active">
                         <i />
@@ -154,6 +157,7 @@ export default function Home() {
                       <p>
                         <ShieldCheck size={14} />
                         Backed by a 60.00 USDC service bond
+                        <ConfidenceBadge confidence={confidenceFor(60)} />
                       </p>
                     </div>
                     <div className="console-timeline">
@@ -199,8 +203,8 @@ export default function Home() {
                       </div>
                       <div className="console-checks">
                         <small>CHECKS</small>
-                        <strong>8,640</strong>
-                        <span className="metric-muted">Every 30 seconds</span>
+                        <strong>720</strong>
+                        <span className="metric-muted">Every 2 minutes</span>
                       </div>
                     </div>
                     <PerformanceChart compact />
@@ -209,7 +213,7 @@ export default function Home() {
                         <i />
                         p95 response time · last 24 hours
                       </span>
-                      <span>Simulated data</span>
+                      <span>api.streamletedge.com</span>
                     </div>
                   </div>
                 </div>
@@ -275,8 +279,8 @@ export default function Home() {
             </h2>
             <p>
               USDC escrow, provider bonding, and SLA-based settlement.
-              <br className="desktop-break" /> Designed for the Arc Mainnet
-              ecosystem.
+              <br className="desktop-break" /> Settled on Arc, with every
+              fee paid in USDC.
             </p>
             <div className="arc-card">
               <Image
@@ -302,9 +306,15 @@ export default function Home() {
                 </a>
               </div>
             </div>
-            <small className="arc-demo-note">
-              Hackathon frontend MVP · All payments and monitoring are simulated
-            </small>
+            <a
+              className="arc-contract-note"
+              href={explorerAddress(SLAFORGE_ADDRESS)}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Arc Microgrants build · Contract verified on Arc{" "}
+              <ArrowUpRight size={13} />
+            </a>
           </Reveal>
         </section>
         <section className="section container faq-section">

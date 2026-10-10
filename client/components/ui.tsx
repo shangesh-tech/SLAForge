@@ -8,12 +8,13 @@ import {
   Search,
   X,
   ShieldCheck,
-  Activity,
   ArrowRight,
 } from "lucide-react";
 import { Service, Status, Agreement, BondStatus } from "@/lib/types";
 import { usdc, shortAddress, settlement, durationLabel } from "@/lib/utils";
 import { useStore } from "./store";
+import { ConfidenceBadge } from "./confidence";
+import { serviceConfidence } from "@/lib/confidence";
 export function Eyebrow({ children }: { children: ReactNode }) {
   return (
     <div className="eyebrow">
@@ -70,11 +71,12 @@ export function ServiceCard({
   preview?: boolean;
 }) {
   const pricePlan =
-    service.plans.find((p) => p.id === "monthly") ?? service.plans[0];
+    service.plans.find((p) => p.minutes === 43200) ?? service.plans[0];
   const content = (
     <>
       <div className="card-top">
         <ServiceMark service={service} />
+        <ConfidenceBadge confidence={serviceConfidence(service)} />
         <span className="category">{service.category}</span>
         <ArrowUpRight size={19} />
       </div>
@@ -84,17 +86,35 @@ export function ServiceCard({
         <ShieldCheck size={13} />
       </p>
       <p className="card-description">{service.tagline}</p>
-      <div className="service-specs">
-        <span>
-          <Activity size={14} />
-          {service.uptime}% uptime
-        </span>
-        <span>≤ {service.latency}ms p95</span>
-        <span>
-          <ShieldCheck size={14} />
-          {usdc(service.bond)} bond
-        </span>
-      </div>
+      <dl className="spec-grid">
+        <div>
+          <dt>Uptime</dt>
+          <dd>
+            {service.uptime}
+            <small>%</small>
+          </dd>
+        </div>
+        <div>
+          <dt>p95</dt>
+          <dd>
+            ≤{service.latency}
+            <small>ms</small>
+          </dd>
+        </div>
+        <div className={service.bondStatus === "Slashed" ? "spec-warn" : ""}>
+          <dt>Bond</dt>
+          <dd>
+            {service.bondStatus === "Slashed" ? (
+              "Slashed"
+            ) : (
+              <>
+                {service.bond.toLocaleString("en-US", { maximumFractionDigits: 2 })}
+                <small>USDC</small>
+              </>
+            )}
+          </dd>
+        </div>
+      </dl>
       <div className="card-bottom">
         <span>
           <strong>{pricePlan.price}</strong> USDC{" "}
@@ -268,12 +288,14 @@ export function EmptyState({
   );
 }
 export function LoadingSkeleton() {
-  return <div className="skeleton" aria-label="Loading demo data" />;
+  return <div className="skeleton" aria-label="Loading from Arc" />;
 }
 export function Countdown({ end }: { end: string | null }) {
   const [now, setNow] = useState<number | null>(null);
   useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1000);
+    const tick = () => setNow(Date.now());
+    tick();
+    const timer = setInterval(tick, 1000);
     return () => clearInterval(timer);
   }, []);
   if (!end) return <span>Not started</span>;
@@ -326,7 +348,7 @@ export function AgreementCard({
         <div>
           <strong>{service?.name}</strong>
           <small>
-            {agreement.id} · {shortAddress(agreement.customer)}
+            Agreement #{agreement.id} · {shortAddress(agreement.customer)}
           </small>
         </div>
       </div>
@@ -341,10 +363,12 @@ export function SettlementBreakdown({
   serviceBond,
 }: {
   agreement: Pick<Agreement, "price" | "status">;
-  serviceBond: number;
+  /** null when the slashed amount is not known (an agreement already settled). */
+  serviceBond: number | null;
 }) {
-  const s = settlement(agreement, serviceBond),
-    failed = agreement.status === "Failed";
+  const s = settlement(agreement, serviceBond ?? 0),
+    failed = agreement.status === "Failed",
+    bond = serviceBond === null ? "service bond" : `${usdc(serviceBond)} service bond`;
   return (
     <div className="settlement">
       <div className="money-flow">
@@ -354,7 +378,7 @@ export function SettlementBreakdown({
         </div>
         <ArrowRight size={20} />
         <div>
-          <small>{failed ? "Customer refunded" : "Provider receives"}</small>
+          <small>{failed ? "Customer refunded" : "Provider credited"}</small>
           <strong>{usdc(failed ? s.refund : s.provider)}</strong>
         </div>
       </div>
@@ -369,7 +393,7 @@ export function SettlementBreakdown({
         </div>
         <div>
           <dt>Service bond slashed → treasury</dt>
-          <dd>{usdc(s.slashedBond)}</dd>
+          <dd>{failed && serviceBond === null ? "Full bond" : usdc(s.slashedBond)}</dd>
         </div>
         <div>
           <dt>Platform fee</dt>
@@ -378,9 +402,28 @@ export function SettlementBreakdown({
       </dl>
       <p className="helper">
         {failed
-          ? `The SLA was missed. The customer gets a full refund, the provider is not paid, and the provider's full ${usdc(serviceBond)} service bond is slashed to the platform treasury. The service is suspended until the provider posts a new bond.`
-          : `The SLA was met. The provider keeps the payment and the ${usdc(serviceBond)} service bond stays locked.`}
+          ? `The SLA was missed. The customer is credited a full refund, the provider is not paid, and the provider's full ${bond} is slashed to the platform treasury. The service is suspended until the provider posts a new bond.`
+          : `The SLA was met. The provider is credited the payment and the ${bond} stays locked.`}{" "}
+        Credited USDC is withdrawn from the wallet menu.
       </p>
     </div>
+  );
+}
+/** A soft two-tone gradient that is unique to each wallet address. */
+export function WalletAvatar({ address, size = 32 }: { address: string; size?: number }) {
+  const hex = address.slice(2).toLowerCase();
+  const hue = (i: number) => (parseInt(hex.slice(i, i + 4), 16) || 0) % 360;
+  const a = hue(0),
+    b = (a + 40 + (hue(8) % 120)) % 360;
+  return (
+    <span
+      className="wallet-avatar"
+      aria-hidden="true"
+      style={{
+        width: size,
+        height: size,
+        background: `radial-gradient(circle at 30% 25%, hsl(${b} 80% 88%), transparent 60%), linear-gradient(135deg, hsl(${a} 55% 62%), hsl(${b} 50% 42%))`,
+      }}
+    />
   );
 }

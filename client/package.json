@@ -11,11 +11,13 @@
   },
   "dependencies": {
     "lucide-react": "^1.51.0",
+    "mongodb": "^7.7.0",
     "motion": "^14.0.0",
     "next": "16.3.8",
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "recharts": "^3.10.1"
+    "recharts": "^3.10.1",
+    "viem": "^2.57.4"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",

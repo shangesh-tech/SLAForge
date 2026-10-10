@@ -26,7 +26,7 @@ export const metadata: Metadata = {
     template: "%s | SLAForge",
   },
   description:
-    "Pay for digital services based on performance. Explore USDC agreements, provider bonds, SLA monitoring, and settlement in the SLAForge frontend demo for Arc.",
+    "Pay for digital services based on performance. USDC agreements, provider bonds, SLA monitoring, and on-chain settlement on Arc.",
   icons: { icon: "data:," },
 };
 export default function RootLayout({

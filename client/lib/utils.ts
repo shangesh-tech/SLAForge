@@ -14,11 +14,14 @@ export const date = (s: string | null) =>
       })
     : "—";
 export const platformFee = 0.1;
-export const minBond = 10;
-export const defaultBond = 40;
-/** SLA met: the provider is paid. SLA missed: the customer gets a full refund,
- * the provider gets nothing, and the service's full bond is slashed to the
- * treasury. The platform fee is kept either way. */
+/** Bond limits enforced by the contract (USDC). */
+export const minBond = 1;
+export const maxBond = 100;
+export const defaultBond = 50;
+/** SLA met: the provider is credited. SLA missed: the customer is credited a
+ * full refund, the provider gets nothing, and the service's full bond is
+ * slashed to the treasury. The platform fee is kept either way. Credits are
+ * withdrawn from the contract with `withdraw()`. */
 export function settlement(
   a: Pick<Agreement, "price" | "status">,
   serviceBond: number,
@@ -39,9 +42,12 @@ export const meetsSLA = (
   maxLatency: number,
 ) => uptime >= targetUptime && latency <= maxLatency;
 
+const plural = (n: number, unit: string) => `${n} ${unit}${n === 1 ? "" : "s"}`;
 export const durationLabel = (minutes: number) =>
   minutes % 1440 === 0
-    ? `${minutes / 1440} days`
+    ? plural(minutes / 1440, "day")
     : minutes % 60 === 0
-      ? `${minutes / 60} hours`
-      : `${minutes} min`;
+      ? plural(minutes / 60, "hour")
+      : `${Math.round(minutes * 100) / 100} min`;
+export const sameAddress = (a?: string | null, b?: string | null) =>
+  !!a && !!b && a.toLowerCase() === b.toLowerCase();

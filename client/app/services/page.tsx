@@ -10,18 +10,21 @@ import {
 } from "lucide-react";
 import { useStore } from "@/components/store";
 import { AppShell } from "@/components/navigation";
-import { categories } from "@/data/mock";
+import { Select } from "@/components/select";
+import { serviceConfidence } from "@/lib/confidence";
+import { categories } from "@/lib/types";
+import { NETWORK_NAME } from "@/lib/web3/config";
 import {
   EmptyState,
   LoadingSkeleton,
   ServiceCard,
 } from "@/components/ui";
 export default function ServicesPage() {
-  const { services: all, ready } = useStore();
+  const { services: all, ready, loadError } = useStore();
   const services = all.filter((s) => s.bondStatus !== "Delisted");
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("All services");
-  const [sort, setSort] = useState("featured");
+  const [sort, setSort] = useState<"featured" | "confidence" | "price" | "uptime">("featured");
   const [onlineOnly, setOnlineOnly] = useState(false);
   const filtered = services
     .filter(
@@ -34,11 +37,13 @@ export default function ServicesPage() {
     )
     .sort((a, b) =>
       sort === "price"
-        ? (a.plans.find((p) => p.id === "monthly")?.price ?? a.plans[0].price) -
-          (b.plans.find((p) => p.id === "monthly")?.price ?? b.plans[0].price)
+        ? (a.plans.find((p) => p.minutes === 43200)?.price ?? a.plans[0].price) -
+          (b.plans.find((p) => p.minutes === 43200)?.price ?? b.plans[0].price)
         : sort === "uptime"
           ? b.uptime - a.uptime
-          : b.customers - a.customers,
+          : sort === "confidence"
+            ? serviceConfidence(b).score - serviceConfidence(a).score
+            : b.customers - a.customers,
     );
   return (
     <AppShell>
@@ -91,20 +96,21 @@ export default function ServicesPage() {
                 checked={onlineOnly}
                 onChange={(e) => setOnlineOnly(e.target.checked)}
               />
-              Online only
+              Available only
             </label>
-            <label className="sort-label">
-              <SlidersHorizontal size={16} />
-              <select
-                aria-label="Sort services"
-                value={sort}
-                onChange={(e) => setSort(e.target.value)}
-              >
-                <option value="featured">Featured first</option>
-                <option value="price">Price: low to high</option>
-                <option value="uptime">Highest uptime SLA</option>
-              </select>
-            </label>
+            <Select
+              variant="inline"
+              label="Sort services"
+              icon={<SlidersHorizontal size={15} />}
+              value={sort}
+              onChange={setSort}
+              options={[
+                { value: "featured", label: "Featured first", hint: "Most active customers" },
+                { value: "confidence", label: "Highest confidence", hint: "Largest provider bond first" },
+                { value: "price", label: "Price: low to high", hint: "Cheapest monthly plan first" },
+                { value: "uptime", label: "Highest uptime SLA", hint: "Strongest guarantee first" },
+              ]}
+            />
           </div>
         </div>
         <div
@@ -128,10 +134,20 @@ export default function ServicesPage() {
             {filtered.length} service{filtered.length !== 1 ? "s" : ""}{" "}
             available
           </span>
-          <span>Demo marketplace · Sample providers</span>
+          <span>{loadError || `Live on ${NETWORK_NAME}`}</span>
         </div>
         {!ready ? (
           <LoadingSkeleton />
+        ) : !services.length ? (
+          <>
+            <EmptyState
+              title="No services listed yet"
+              description="Be the first provider on SLAForge. List a service and post your bond on Arc."
+            />
+            <Link className="button button-dark" href="/provider/services/new">
+              List a service <ArrowUpRight size={16} />
+            </Link>
+          </>
         ) : filtered.length ? (
           <div className="service-grid marketplace-grid">
             {filtered.map((s) => (

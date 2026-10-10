@@ -3,6 +3,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
 import {
+  ArrowLeftRight,
   ArrowUpRight,
   ChevronDown,
   CircleHelp,
@@ -11,14 +12,21 @@ import {
   LogOut,
   Menu,
   Plus,
+  ReceiptText,
   ShieldCheck,
+  TriangleAlert,
   UserRound,
   Wallet,
   X,
 } from "lucide-react";
 import { useState, useSyncExternalStore } from "react";
 import { useStore } from "./store";
-import { shortAddress } from "@/lib/utils";
+import { CopyButton, WalletAvatar } from "./ui";
+import { shortAddress, usdc } from "@/lib/utils";
+import { useWallet } from "@/lib/web3/wallet";
+import { explorerAddress, NETWORK_NAME } from "@/lib/web3/config";
+import { friendlyError } from "@/lib/web3/errors";
+import { signOut } from "@/lib/profile-api";
 export function Logo() {
   return (
     <Link href="/" className="brand" aria-label="SLAForge home">
@@ -46,38 +54,114 @@ export function Logo() {
   );
 }
 export function WalletButton({ full = false }: { full?: boolean }) {
-  const { wallet, connect, disconnect } = useStore();
+  const { wallet, balance, balanceFailed, withdraw, busy, notify, role } =
+    useStore();
+  const { openPicker, disconnect, wrongNetwork, switchNetwork, switchAccount } =
+    useWallet();
   const [open, setOpen] = useState(false);
+  if (wallet && wrongNetwork)
+    return (
+      <button
+        className={`button button-danger ${full ? "full-width" : ""}`}
+        onClick={() =>
+          switchNetwork().catch((e) => notify(friendlyError(e)))
+        }
+      >
+        <TriangleAlert size={16} />
+        <span>Switch to {NETWORK_NAME}</span>
+      </button>
+    );
+  const close = () => setOpen(false);
   return (
     <div className="wallet-wrap">
       <button
-        className={`button ${wallet ? "button-wallet" : "button-dark"} ${full ? "full-width" : ""}`}
+        className={`button ${wallet ? "button-wallet" : "button-dark"} ${full ? "full-width" : ""} ${open ? "open" : ""}`}
         aria-expanded={wallet ? open : undefined}
-        onClick={() => (wallet ? setOpen(!open) : connect())}
+        aria-haspopup={wallet ? "menu" : undefined}
+        onClick={() => (wallet ? setOpen(!open) : openPicker())}
       >
-        <Wallet size={16} />
+        {wallet ? <WalletAvatar address={wallet} size={20} /> : <Wallet size={16} />}
         <span>{wallet ? shortAddress(wallet) : "Connect wallet"}</span>
-        {wallet && <ChevronDown size={14} />}
+        {wallet && <ChevronDown size={14} className="wallet-chevron" />}
       </button>
       {open && wallet && (
         <>
           <button
             aria-label="Close wallet menu"
             className="menu-dismiss"
-            onClick={() => setOpen(false)}
+            onClick={close}
           />
-          <div className="wallet-menu">
-            <small>SIMULATED WALLET</small>
-            <strong>{shortAddress(wallet)}</strong>
-            <p>2,450.00 demo USDC</p>
-            <Link href="/profile" onClick={() => setOpen(false)}>
-              <UserRound size={15} />
-              View profile
-            </Link>
+          <div className="wallet-menu" role="menu">
+            <div className="wallet-menu-head">
+              <WalletAvatar address={wallet} size={38} />
+              <div>
+                <strong className="wallet-menu-address">
+                  {shortAddress(wallet)}
+                  <CopyButton value={wallet} label="Copy wallet address" />
+                </strong>
+                <small>
+                  <i className="live-dot" />
+                  {NETWORK_NAME}
+                  {role && <span className="wallet-menu-role">{role}</span>}
+                </small>
+              </div>
+            </div>
+            <div className="wallet-menu-balance">
+              <small>USDC balance</small>
+              <strong>
+                {balance
+                  ? usdc(balance.wallet)
+                  : balanceFailed
+                    ? "Unavailable · retrying"
+                    : "Loading…"}
+              </strong>
+            </div>
+            {!!balance?.claimable && (
+              <div className="wallet-claim">
+                <span>
+                  <small>Ready to withdraw</small>
+                  <strong>{usdc(balance.claimable)}</strong>
+                </span>
+                <button
+                  className="button button-dark button-sm"
+                  disabled={busy}
+                  onClick={() => withdraw()}
+                >
+                  Withdraw
+                </button>
+              </div>
+            )}
+            <nav className="wallet-menu-links" aria-label="Wallet">
+              <Link href="/payments" onClick={close} role="menuitem">
+                <ReceiptText size={15} />
+                Payments & history
+              </Link>
+              <Link href="/profile" onClick={close} role="menuitem">
+                <UserRound size={15} />
+                View profile
+              </Link>
+              <button
+                role="menuitem"
+                onClick={() => {
+                  close();
+                  switchAccount().catch((e) => notify(friendlyError(e)));
+                }}
+              >
+                <ArrowLeftRight size={15} />
+                Switch wallet account
+              </button>
+              <a href={explorerAddress(wallet)} target="_blank" rel="noreferrer" role="menuitem">
+                <ArrowUpRight size={15} />
+                View on explorer
+              </a>
+            </nav>
             <button
+              className="wallet-menu-disconnect"
+              role="menuitem"
               onClick={() => {
+                signOut().catch(() => {});
                 disconnect();
-                setOpen(false);
+                close();
               }}
             >
               <LogOut size={15} />
@@ -87,6 +171,20 @@ export function WalletButton({ full = false }: { full?: boolean }) {
         </>
       )}
     </div>
+  );
+}
+function NetworkPill() {
+  const { wrongNetwork } = useWallet();
+  return wrongNetwork ? (
+    <span className="network-pill network-pill-wrong">
+      <i className="live-dot" />
+      Wrong <span>network</span>
+    </span>
+  ) : (
+    <span className="network-pill">
+      <i className="live-dot" />
+      {NETWORK_NAME}
+    </span>
   );
 }
 function subscribeScroll(onChange: () => void) {
@@ -105,9 +203,13 @@ export function Navbar() {
     getScrolled,
     getServerScrolled,
   );
+  const { role } = useStore();
   const links = [
     { href: "/services", name: "Explore services" },
-    { href: "/dashboard/customer", name: "Dashboard" },
+    {
+      href: role === "Provider" ? "/dashboard/provider" : "/dashboard/customer",
+      name: "Dashboard",
+    },
   ];
   return (
     <header
@@ -128,10 +230,7 @@ export function Navbar() {
           ))}
         </nav>
         <div className="nav-end">
-          <span className="network-pill">
-            <i className="live-dot" />
-            Arc <span>Mainnet</span>
-          </span>
+          <NetworkPill />
           <WalletButton />
           <button
             className="mobile-menu-button icon-button"
@@ -147,7 +246,13 @@ export function Navbar() {
         <nav className="mobile-nav" aria-label="Mobile navigation">
           {[
             ...links,
-            { href: "/dashboard/provider", name: "Provider dashboard" },
+            ...(role
+              ? []
+              : [{ href: "/dashboard/provider", name: "Provider dashboard" }]),
+            ...(role !== "Customer"
+              ? [{ href: "/provider/services/new", name: "List a service" }]
+              : []),
+            { href: "/payments", name: "Payments" },
             { href: "/profile", name: "Profile" },
           ].map((l) => (
             <Link href={l.href} key={l.href} onClick={() => setOpen(false)}>
@@ -160,22 +265,34 @@ export function Navbar() {
     </header>
   );
 }
-const sidebarLinks = [
-  {
-    href: "/dashboard/customer",
-    label: "My agreements",
-    icon: LayoutDashboard,
-  },
-  { href: "/services", label: "Explore services", icon: FolderKanban },
-  {
-    href: "/dashboard/provider",
-    label: "Provider workspace",
-    icon: ShieldCheck,
-  },
-  { href: "/profile", label: "My profile", icon: UserRound },
-];
+const customerLink = {
+  href: "/dashboard/customer",
+  label: "My agreements",
+  icon: LayoutDashboard,
+};
+const exploreLink = {
+  href: "/services",
+  label: "Explore services",
+  icon: FolderKanban,
+};
+const providerLink = {
+  href: "/dashboard/provider",
+  label: "Provider workspace",
+  icon: ShieldCheck,
+};
+const paymentsLink = { href: "/payments", label: "Payments", icon: ReceiptText };
+const profileLink = { href: "/profile", label: "My profile", icon: UserRound };
+/** Customers and providers each see their own workspace; guests see both. */
+const sidebarLinksFor = (role: "Customer" | "Provider" | null) =>
+  role === "Customer"
+    ? [customerLink, exploreLink, paymentsLink, profileLink]
+    : role === "Provider"
+      ? [providerLink, exploreLink, paymentsLink, profileLink]
+      : [customerLink, exploreLink, providerLink, paymentsLink, profileLink];
 export function Sidebar() {
   const pathname = usePathname();
+  const { role, wallet, registered, openOnboarding } = useStore();
+  const sidebarLinks = sidebarLinksFor(role);
   return (
     <aside className="sidebar">
       <div className="sidebar-top">
@@ -192,11 +309,22 @@ export function Sidebar() {
             </Link>
           ))}
         </nav>
-        <div className="sidebar-divider" />
-        <Link className="sidebar-create" href="/provider/services/new">
-          <Plus size={17} />
-          List a service
-        </Link>
+        {(role !== "Customer" || (wallet && registered === false)) && (
+          <div className="sidebar-actions">
+          {role !== "Customer" && (
+            <Link className="sidebar-create" href="/provider/services/new">
+              <Plus size={17} />
+              List a service
+            </Link>
+          )}
+          {wallet && registered === false && (
+            <button className="sidebar-create" onClick={openOnboarding}>
+              <UserRound size={17} />
+              Create your profile
+            </button>
+          )}
+          </div>
+        )}
       </div>
       <div className="sidebar-bottom">
         <div className="sidebar-tip">

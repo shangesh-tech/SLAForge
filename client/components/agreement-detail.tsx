@@ -1,28 +1,25 @@
 "use client";
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Gauge,
   ArrowLeft,
-  ArrowRight,
   ArrowUpRight,
   Check,
   CheckCheck,
   Clock3,
-  Eye,
-  EyeOff,
+  Hourglass,
   Info,
-  KeyRound,
   LockKeyhole,
   Radio,
   ShieldCheck,
   TriangleAlert,
   X,
 } from "lucide-react";
+import { LatencyIcon, UptimeIcon } from "./icons";
 import { useStore } from "./store";
 import { AppShell } from "./navigation";
 import {
-  ConfirmModal,
   CopyButton,
   Countdown,
   EmptyState,
@@ -33,24 +30,37 @@ import {
   SLAProgress,
   StatusBadge,
 } from "./ui";
-import { PerformanceChart } from "./charts";
-import { date, platformFee, shortAddress, usdc } from "@/lib/utils";
-import { checks } from "@/data/mock";
+import { date, platformFee, sameAddress, shortAddress, usdc } from "@/lib/utils";
+import { explorerAddress, explorerTx } from "@/lib/web3/config";
+
+/** True once the agreement's service period is over. */
+function useEnded(end: string | null) {
+  const [ended, setEnded] = useState(false);
+  useEffect(() => {
+    if (!end) return;
+    const check = () => setEnded(Date.now() >= new Date(end).getTime());
+    check();
+    const timer = setInterval(check, 1000);
+    return () => clearInterval(timer);
+  }, [end]);
+  return ended;
+}
+
 export function AgreementDetail({ id }: { id: string }) {
-  const { agreements, services, ready, settle, notify } = useStore();
-  const [tab, setTab] = useState("Overview");
-  const [reveal, setReveal] = useState(false);
-  const [modal, setModal] = useState(false);
-  const [outcome, setOutcome] = useState<"Passed" | "Failed">("Passed");
-  const [preview, setPreview] = useState<"Passed" | "Failed">("Passed");
+  const { agreements, services, ready, wallet, balance, busy, withdraw } =
+    useStore();
+  const [picked, setPreview] = useState<"Passed" | "Failed" | null>(null);
   const a = agreements.find((v) => v.id === id);
+  const ended = useEnded(a?.end ?? null);
+  const live = useMonitoring(id, a?.status);
   if (!ready)
     return (
       <AppShell>
         <LoadingSkeleton />
       </AppShell>
     );
-  if (!a)
+  const s = a && services.find((v) => v.id === a.serviceId);
+  if (!a || !s)
     return (
       <AppShell>
         <EmptyState
@@ -62,12 +72,25 @@ export function AgreementDetail({ id }: { id: string }) {
         </Link>
       </AppShell>
     );
-  const s = services.find((v) => v.id === a.serviceId)!;
   const active = a.status === "Active";
   const finished = !active;
   const failed = a.status === "Failed";
-  const apiKey = `sk_demo_${a.id.toLowerCase().replace("-", "_")}_7k9r2m4x8p6n`;
   const plan = s.plans.find((p) => p.id === a.planId);
+  // What the monitor's checks point to right now (null until there is data).
+  const verdict: "Passed" | "Failed" | null =
+    live && live.total > 0
+      ? live.uptimePercent! >= s.uptime &&
+        live.p95LatencyMs !== null &&
+        live.p95LatencyMs <= s.latency
+        ? "Passed"
+        : "Failed"
+      : null;
+  const preview = picked ?? verdict ?? "Passed";
+  const isCustomer = sameAddress(wallet, a.customer);
+  const isProvider = sameAddress(wallet, a.provider);
+  const canWithdraw =
+    !!balance?.claimable &&
+    ((failed && isCustomer) || (a.status === "Passed" && isProvider));
   return (
     <AppShell>
       <div id="main-content">
@@ -77,17 +100,17 @@ export function AgreementDetail({ id }: { id: string }) {
             Your agreements
           </Link>
           <span>/</span>
-          <span>{a.id}</span>
+          <span>Agreement #{a.id}</span>
           <CopyButton value={a.id} label="Copy agreement ID" />
         </div>
         <div className="page-heading agreement-heading">
           <div>
             <h1>
               {s.name}
-              <span className="agreement-heading-id">{a.id}</span>
+              <span className="agreement-heading-id">#{a.id}</span>
             </h1>
             <p>
-              {plan?.name ?? "Custom plan"} · Created {date(a.created)}
+              {plan?.name ?? "Plan"} · Started {date(a.start)}
             </p>
           </div>
           <StatusBadge status={a.status} />
@@ -127,13 +150,50 @@ export function AgreementDetail({ id }: { id: string }) {
             <div>
               <strong>
                 {failed
-                  ? "SLA missed. Your payment was refunded."
+                  ? "SLA missed. The payment was refunded."
                   : "Promise kept. Agreement settled."}
               </strong>
               <p>
                 {failed
-                  ? `${usdc(a.price)} was returned to the customer. ${s.provider} was not paid, its ${usdc(s.bond)} service bond was slashed to the platform treasury, and the service is suspended until it is re-bonded.`
-                  : "The provider receives the service payment and the service bond stays locked."}
+                  ? `${usdc(a.price)} was credited back to the customer. The provider was not paid, the service bond was slashed to the platform treasury, and the service is suspended until it is re-bonded.`
+                  : `${usdc(a.price)} was credited to the provider and the service bond stays locked.`}
+              </p>
+              {live?.settlement && (
+                <p className="callout-measured">
+                  Monitor result: {live.settlement.reason} Measured{" "}
+                  {live.settlement.uptimePercent.toFixed(2)}% uptime ·{" "}
+                  {live.settlement.p95LatencyMs ?? "—"}ms p95 ·{" "}
+                  {live.settlement.checks} checks.{" "}
+                  <a
+                    className="text-link"
+                    href={explorerTx(live.settlement.txHash)}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    View settlement tx <ArrowUpRight size={13} />
+                  </a>
+                </p>
+              )}
+            </div>
+            {canWithdraw && (
+              <button
+                className="button button-dark"
+                disabled={busy}
+                onClick={() => withdraw()}
+              >
+                Withdraw {usdc(balance!.claimable)}
+              </button>
+            )}
+          </div>
+        )}
+        {active && ended && (
+          <div className="state-callout passed-callout">
+            <Hourglass size={23} />
+            <div>
+              <strong>Service period complete.</strong>
+              <p>
+                The monitor settles this agreement automatically on its next
+                run. The payment stays locked in the contract until then.
               </p>
             </div>
           </div>
@@ -144,7 +204,7 @@ export function AgreementDetail({ id }: { id: string }) {
             value={usdc(a.price)}
             note={
               active
-                ? "Held until settlement"
+                ? "Held by the contract until settlement"
                 : failed
                   ? "Refunded to the customer"
                   : "Paid to the provider"
@@ -153,13 +213,15 @@ export function AgreementDetail({ id }: { id: string }) {
           />
           <MetricCard
             label="Service bond"
-            value={usdc(s.bond)}
+            value={failed ? "Slashed" : usdc(s.bond)}
             note={
-              s.bondStatus === "Bonded"
-                ? "Locked by the provider"
-                : s.bondStatus === "Slashed"
-                  ? "Slashed to the treasury"
-                  : "Refunded on delisting"
+              failed
+                ? "Sent to the platform treasury"
+                : s.bondStatus === "Bonded"
+                  ? "Locked by the provider"
+                  : s.bondStatus === "Slashed"
+                    ? "Slashed after another SLA breach"
+                    : "Refunded on delisting"
             }
             icon={<ShieldCheck size={17} />}
           />
@@ -170,295 +232,222 @@ export function AgreementDetail({ id }: { id: string }) {
             icon={<Info size={17} />}
           />
           <MetricCard
-            label={active ? "Time remaining" : "Settled on"}
+            label={active && !ended ? "Time remaining" : "Service period ended"}
             value={
-              active ? (
+              active && !ended ? (
                 <Countdown end={a.end} />
               ) : (
                 <span className="date-value">{date(a.end)}</span>
               )
             }
             note={
-              active
-                ? "Simulated monitoring is running"
-                : "Final demo outcome recorded"
+              !active
+                ? "Outcome recorded on Arc"
+                : ended
+                  ? "Awaiting automatic settlement"
+                  : `Ends ${date(a.end)}`
             }
             icon={<Clock3 size={17} />}
           />
         </div>
-        <div className="tabs workspace-tabs">
-          {["Overview", "Monitoring", "API access"].map((t) => (
-            <button
-              className={tab === t ? "selected" : ""}
-              key={t}
-              onClick={() => setTab(t)}
-            >
-              {t}
-            </button>
-          ))}
-          <span className="tabs-note">
-            <Radio size={13} />
-            Simulated measurements
-          </span>
-        </div>
         <div className="agreement-detail-grid">
           <div className="detail-main">
-            {tab === "Overview" && (
-              <>
-                <section className="panel">
-                  <div className="panel-heading">
-                    <h2>The promise, in numbers.</h2>
-                    <span className="simulation-label">
-                      <i className="live-dot" />
-                      {active ? "Demo monitor" : "Final snapshot"}
-                    </span>
-                  </div>
+            <section className="panel">
+              <div className="panel-heading">
+                <h2>The promise, in numbers.</h2>
+                <span className="simulation-label">
+                  <i className="live-dot" />
+                  {!active ? "Settled" : ended ? "Awaiting settlement" : "Being monitored"}
+                </span>
+              </div>
+              <div className="sla-targets">
+                <div>
+                  <UptimeIcon size={20} />
+                  <small>MINIMUM UPTIME</small>
+                  <strong>
+                    {s.uptime}
+                    <span>%</span>
+                  </strong>
+                  <p>Successful health checks</p>
+                </div>
+                <div>
+                  <LatencyIcon size={20} />
+                  <small>MAXIMUM P95 LATENCY</small>
+                  <strong>
+                    {s.latency}
+                    <span>ms</span>
+                  </strong>
+                  <p>95th percentile response time</p>
+                </div>
+              </div>
+              {live && live.total > 0 ? (
+                <>
                   <div className="sla-progress-grid">
                     <SLAProgress
-                      label="Uptime"
-                      value={`${a.uptime.toFixed(2)}%`}
+                      label="Measured uptime"
+                      value={`${live.uptimePercent!.toFixed(2)}%`}
                       target={`Minimum ${s.uptime}%`}
-                      good={a.uptime >= s.uptime}
+                      good={live.uptimePercent! >= s.uptime}
                     />
                     <SLAProgress
-                      label="p95 latency"
-                      value={`${a.latency}ms`}
+                      label="Measured p95 latency"
+                      value={live.p95LatencyMs === null ? "—" : `${live.p95LatencyMs}ms`}
                       target={`Maximum ${s.latency}ms`}
-                      good={a.latency <= s.latency}
+                      good={live.p95LatencyMs !== null && live.p95LatencyMs <= s.latency}
                     />
                   </div>
                   <div className="check-metrics">
                     <div>
                       <small>Total checks</small>
-                      <strong>{a.checks.toLocaleString()}</strong>
+                      <strong>{live.total}</strong>
                     </div>
                     <div>
                       <small>Successful</small>
                       <strong className="text-success">
-                        {Math.max(
-                          0,
-                          a.checks - a.failedChecks,
-                        ).toLocaleString()}
+                        {live.total - live.failed}
                       </strong>
                     </div>
                     <div>
                       <small>Failed</small>
-                      <strong className={a.failedChecks ? "text-danger" : ""}>
-                        {a.failedChecks}
+                      <strong className={live.failed ? "text-danger" : ""}>
+                        {live.failed}
                       </strong>
                     </div>
                     <div>
                       <small>Check interval</small>
                       <strong>
-                        30<span>s</span>
+                        {live.monitor.intervalMs % 60_000 === 0
+                          ? live.monitor.intervalMs / 60_000
+                          : live.monitor.intervalMs / 1000}
+                        <span>{live.monitor.intervalMs % 60_000 === 0 ? "min" : "sec"}</span>
                       </strong>
                     </div>
-                  </div>
-                  <p className="helper">
-                    {`Last checked: ${a.lastChecked ? date(a.lastChecked) : "Waiting for first simulated check"}. Measurements are generated locally while the app is open.`}
-                  </p>
-                </section>
-                <div className="chart-grid">
-                  <section className="panel">
-                    <div className="panel-heading">
-                      <h2>Uptime history</h2>
-                      <span className="chart-unit">%</span>
-                    </div>
-                    <PerformanceChart
-                      type="uptime"
-                      failed={failed}
-                      target={s.uptime}
-                    />
-                    <p className="chart-caption">
-                      Illustrative 24-hour trend · Not an endpoint measurement
-                    </p>
-                  </section>
-                  <section className="panel">
-                    <div className="panel-heading">
-                      <h2>p95 latency</h2>
-                      <span className="chart-unit">ms</span>
-                    </div>
-                    <PerformanceChart failed={failed} target={s.latency} />
-                    <p className="chart-caption">
-                      Illustrative 24-hour trend · Not an endpoint measurement
-                    </p>
-                  </section>
-                </div>
-                <section className="panel">
-                  <div className="panel-heading">
-                    <h2>Agreement details</h2>
-                    <ShieldCheck size={18} />
-                  </div>
-                  <dl className="detail-list agreement-facts">
-                    <div>
-                      <dt>Agreement ID</dt>
-                      <dd>
-                        {a.id}
-                        <CopyButton value={a.id} />
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>Service</dt>
-                      <dd>
-                        <Link className="text-link" href={`/services/${s.id}`}>
-                          {s.name}
-                          <ArrowUpRight size={14} />
-                        </Link>
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>Provider</dt>
-                      <dd>{s.provider}</dd>
-                    </div>
-                    <div>
-                      <dt>Provider wallet</dt>
-                      <dd>
-                        <code>{shortAddress(a.provider)}</code>
-                        <CopyButton value={a.provider} />
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>Customer wallet</dt>
-                      <dd>
-                        <code>{shortAddress(a.customer)}</code>
-                        <CopyButton value={a.customer} />
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>Starts</dt>
-                      <dd>{date(a.start)}</dd>
-                    </div>
-                    <div>
-                      <dt>Ends</dt>
-                      <dd>{date(a.end)}</dd>
-                    </div>
-                    <div>
-                      <dt>Uptime requirement</dt>
-                      <dd>≥ {s.uptime}%</dd>
-                    </div>
-                    <div>
-                      <dt>p95 latency requirement</dt>
-                      <dd>≤ {s.latency}ms</dd>
-                    </div>
-                  </dl>
-                </section>
-              </>
-            )}
-            {tab === "Monitoring" && (
-              <>
-                <section className="panel">
-                  <div className="panel-heading">
-                    <h2>Monitoring overview</h2>
-                    <span className="tiny-tag">SIMULATED</span>
-                  </div>
-                  <div className="check-metrics">
-                    <div>
-                      <small>Total checks</small>
-                      <strong>{a.checks.toLocaleString()}</strong>
-                    </div>
-                    <div>
-                      <small>Successful</small>
-                      <strong>
-                        {Math.max(
-                          0,
-                          a.checks - a.failedChecks,
-                        ).toLocaleString()}
-                      </strong>
-                    </div>
-                    <div>
-                      <small>Failed</small>
-                      <strong>{a.failedChecks}</strong>
-                    </div>
-                  </div>
-                  <PerformanceChart failed={failed} target={s.latency} />
-                </section>
-                <section className="panel">
-                  <div className="panel-heading">
-                    <h2>Recent monitoring checks</h2>
-                    <span className="muted-label">Every 30 seconds</span>
-                  </div>
-                  <RecentChecks
-                    count={a.checks}
-                    lastChecked={a.lastChecked}
-                    maxLatency={s.latency}
-                    failed={failed}
-                  />
-                </section>
-              </>
-            )}
-            {tab === "API access" && (
-              <section className="panel">
-                <div className="panel-heading">
-                  <h2>Your API credentials</h2>
-                  <KeyRound size={19} />
-                </div>
-                <>
-                  <p className="body-copy">
-                    Use these illustrative credentials to understand the
-                    integration flow. They cannot authenticate against any real
-                    service.
-                  </p>
-                  <div className="credential">
-                    <label>User ID</label>
-                    <div>
-                      <code>usr_demo_{a.id.toLowerCase()}</code>
-                      <CopyButton
-                        value={`usr_demo_${a.id.toLowerCase()}`}
-                        label="Copy user ID"
-                      />
-                    </div>
-                  </div>
-                  <div className="credential">
-                    <label>
-                      API key <span className="tiny-tag">DEMO KEY</span>
-                    </label>
-                    <div>
-                      <code>
-                        {reveal ? apiKey : "sk_demo_••••••••••••••••••••••••"}
-                      </code>
-                      <button
-                        className="icon-button"
-                        aria-label={reveal ? "Hide API key" : "Reveal API key"}
-                        onClick={() => setReveal(!reveal)}
-                      >
-                        {reveal ? <EyeOff size={17} /> : <Eye size={17} />}
-                      </button>
-                      <CopyButton value={apiKey} label="Copy API key" />
-                    </div>
-                  </div>
-                  <div className="endpoint-block">
-                    <span>Health endpoint</span>
-                    <code>{s.endpoint}</code>
-                  </div>
-                  <div className="info-box">
-                    <Info size={17} />
-                    <p>
-                      Credentials are mock values stored on this device. No
-                      requests or authentication are performed by this frontend.
-                    </p>
                   </div>
                 </>
-              </section>
-            )}
-            {tab === "Overview" && (
-              <section className="panel recent-checks-panel">
-                <div className="panel-heading">
-                  <h2>Recent checks</h2>
-                  <button
-                    className="text-link"
-                    onClick={() => setTab("Monitoring")}
-                  >
-                    View monitoring <ArrowRight size={15} />
-                  </button>
+              ) : (
+                <div className="info-box">
+                  <Radio size={17} />
+                  <p>
+                    {active
+                      ? "Waiting for the first health check. "
+                      : "No health checks were recorded for this agreement. "}
+                    The SLAForge monitor checks <code>{s.endpoint}</code> every
+                    few seconds to minutes and settles the agreement on-chain
+                    automatically.
+                  </p>
                 </div>
-                <RecentChecks
-                  count={Math.min(a.checks, 5)}
-                  lastChecked={a.lastChecked}
-                  maxLatency={s.latency}
-                  failed={failed}
-                />
+              )}
+              <MonitorStatusLine status={live?.monitor ?? null} />
+            </section>
+            {live && live.checks.length > 0 && (
+              <section className="panel">
+                <div className="panel-heading">
+                  <h2>Recent health checks</h2>
+                  <span className="muted-label">
+                    Every {everyLabel(live.monitor.intervalMs)}
+                  </span>
+                </div>
+                <div className="table-scroll">
+                  <table className="checks-table">
+                    <thead>
+                      <tr>
+                        <th>CHECK TIME</th>
+                        <th>RESPONSE</th>
+                        <th>STATUS</th>
+                        <th>RESULT</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {live.checks.map((c) => (
+                        <tr key={c.at}>
+                          <td>{new Date(c.at).toLocaleTimeString("en-US")}</td>
+                          <td>{c.latencyMs === null ? "—" : `${c.latencyMs}ms`}</td>
+                          <td>{c.status ?? c.error}</td>
+                          <td>
+                            <span className={`check-result ${c.ok ? "" : "failed"}`}>
+                              {c.ok ? <Check size={13} /> : <X size={13} />}
+                              {c.ok ? "Up" : "Down"}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </section>
             )}
+            <section className="panel">
+              <div className="panel-heading">
+                <h2>Agreement details</h2>
+                <ShieldCheck size={18} />
+              </div>
+              <dl className="detail-list agreement-facts">
+                <div>
+                  <dt>Agreement ID</dt>
+                  <dd>
+                    #{a.id}
+                    <CopyButton value={a.id} />
+                  </dd>
+                </div>
+                <div>
+                  <dt>Service</dt>
+                  <dd>
+                    <Link className="text-link" href={`/services/${s.id}`}>
+                      {s.name}
+                      <ArrowUpRight size={14} />
+                    </Link>
+                  </dd>
+                </div>
+                <div>
+                  <dt>Provider wallet</dt>
+                  <dd>
+                    <a
+                      className="text-link"
+                      href={explorerAddress(a.provider)}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      <code>{shortAddress(a.provider)}</code>
+                    </a>
+                    <CopyButton value={a.provider} />
+                  </dd>
+                </div>
+                <div>
+                  <dt>Customer wallet</dt>
+                  <dd>
+                    <a
+                      className="text-link"
+                      href={explorerAddress(a.customer)}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      <code>{shortAddress(a.customer)}</code>
+                    </a>
+                    <CopyButton value={a.customer} />
+                  </dd>
+                </div>
+                <div>
+                  <dt>Plan</dt>
+                  <dd>{plan?.name ?? `Plan ${a.planId}`}</dd>
+                </div>
+                <div>
+                  <dt>Starts</dt>
+                  <dd>{date(a.start)}</dd>
+                </div>
+                <div>
+                  <dt>Ends</dt>
+                  <dd>{date(a.end)}</dd>
+                </div>
+                <div>
+                  <dt>Uptime requirement</dt>
+                  <dd>≥ {s.uptime}%</dd>
+                </div>
+                <div>
+                  <dt>p95 latency requirement</dt>
+                  <dd>≤ {s.latency}ms</dd>
+                </div>
+              </dl>
+            </section>
           </div>
           <aside className="agreement-aside">
             <section className="panel settlement-panel">
@@ -466,52 +455,44 @@ export function AgreementDetail({ id }: { id: string }) {
                 <h2>{finished ? "Final settlement" : "Settlement outlook"}</h2>
                 <ShieldCheck size={19} />
               </div>
-              <>
-                {!finished && (
-                  <>
-                    <p className="helper">
-                      Preview both outcomes for this agreement.
-                    </p>
-                    <div className="segmented-control outcome-tabs">
-                      <button
-                        className={preview === "Passed" ? "selected" : ""}
-                        onClick={() => setPreview("Passed")}
-                      >
-                        <Check size={13} />
-                        SLA met
-                      </button>
-                      <button
-                        className={preview === "Failed" ? "selected" : ""}
-                        onClick={() => setPreview("Failed")}
-                      >
-                        <X size={13} />
-                        SLA missed
-                      </button>
-                    </div>
-                  </>
-                )}
-                {finished && <StatusBadge status={a.status} />}
-                <SettlementBreakdown
-                  agreement={{
-                    price: a.price,
-                    status: finished ? a.status : preview,
-                  }}
-                  serviceBond={s.bond}
-                />
-                {active && (
-                  <button
-                    className="button button-dark full-width"
-                    onClick={() => setModal(true)}
-                  >
-                    Simulate settlement <ArrowRight size={16} />
-                  </button>
-                )}
-                <p className="secure-note">
-                  {finished
-                    ? "Demo outcome · No funds transferred"
-                    : "Simulation · Settlement runs at demo expiry"}
-                </p>
-              </>
+              {!finished && (
+                <>
+                  <p className="helper">
+                    {verdict
+                      ? `Based on the checks so far, this agreement is heading for "${verdict === "Passed" ? "SLA met" : "SLA missed"}". Preview both outcomes:`
+                      : "Preview both outcomes for this agreement."}
+                  </p>
+                  <div className="segmented-control outcome-tabs">
+                    <button
+                      className={preview === "Passed" ? "selected" : ""}
+                      onClick={() => setPreview("Passed")}
+                    >
+                      <Check size={13} />
+                      SLA met
+                    </button>
+                    <button
+                      className={preview === "Failed" ? "selected" : ""}
+                      onClick={() => setPreview("Failed")}
+                    >
+                      <X size={13} />
+                      SLA missed
+                    </button>
+                  </div>
+                </>
+              )}
+              {finished && <StatusBadge status={a.status} />}
+              <SettlementBreakdown
+                agreement={{
+                  price: a.price,
+                  status: finished ? a.status : preview,
+                }}
+                serviceBond={failed ? null : s.bond}
+              />
+              <p className="secure-note">
+                {finished
+                  ? "Settled automatically by the SLAForge monitor"
+                  : "Settles automatically when the period ends, or as soon as the SLA is breached"}
+              </p>
             </section>
             <section className="agreement-service-note">
               <ServiceMark service={s} />
@@ -533,116 +514,100 @@ export function AgreementDetail({ id }: { id: string }) {
             </div>
           </aside>
         </div>
-        {modal && (
-          <ConfirmModal
-            title="Choose a demo outcome"
-            onClose={() => setModal(false)}
-          >
-            <>
-              <p className="body-copy">
-                Finish the demo service period now and see how each outcome
-                distributes the funds.
-              </p>
-              <div className="segmented-control outcome-tabs">
-                <button
-                  className={outcome === "Passed" ? "selected" : ""}
-                  onClick={() => setOutcome("Passed")}
-                >
-                  SLA passed
-                </button>
-                <button
-                  className={outcome === "Failed" ? "selected" : ""}
-                  onClick={() => setOutcome("Failed")}
-                >
-                  SLA failed
-                </button>
-              </div>
-              <SettlementBreakdown
-                agreement={{ price: a.price, status: outcome }}
-                serviceBond={s.bond}
-              />
-              <button
-                className="button button-dark full-width"
-                onClick={() => {
-                  settle(a.id, outcome);
-                  notify(
-                    `Demo agreement ${outcome.toLowerCase()}. Settlement recorded locally.`,
-                  );
-                  setModal(false);
-                }}
-              >
-                Record {outcome.toLowerCase()} outcome <ArrowRight size={16} />
-              </button>
-              <p className="secure-note">
-                Sets an illustrative final measurement. No real transfer.
-              </p>
-            </>
-          </ConfirmModal>
-        )}
       </div>
     </AppShell>
   );
 }
-function RecentChecks({
-  count,
-  lastChecked,
-  maxLatency,
-  failed,
-}: {
-  count: number;
-  lastChecked: string | null;
-  maxLatency: number;
-  failed: boolean;
-}) {
-  const visible = checks.slice(0, Math.min(12, count));
-  if (!visible.length)
-    return (
-      <EmptyState
-        title="Awaiting the first check"
-        description="The first simulated measurement appears 30 seconds after activation."
-      />
-    );
+
+type MonitorStatus = {
+  intervalMs: number;
+  lastRunAt: string | null;
+  lastResult: { skipped?: string; errors: string[] } | null;
+};
+type Monitoring = {
+  checks: {
+    at: string;
+    ok: boolean;
+    status: number | null;
+    latencyMs: number | null;
+    error: string | null;
+  }[];
+  total: number;
+  failed: number;
+  uptimePercent: number | null;
+  p95LatencyMs: number | null;
+  settlement: {
+    slaMet: boolean;
+    reason: string;
+    uptimePercent: number;
+    p95LatencyMs: number | null;
+    checks: number;
+    failedChecks: number;
+    txHash: string;
+    at: string;
+  } | null;
+  monitor: MonitorStatus;
+};
+
+const everyLabel = (ms: number) =>
+  ms % 60_000 === 0
+    ? `${ms / 60_000} minute${ms === 60_000 ? "" : "s"}`
+    : `${ms / 1000} seconds`;
+
+/** Live monitoring data from the SLAForge monitor, refreshed every 15 seconds. */
+function useMonitoring(id: string, status?: string) {
+  const [data, setData] = useState<Monitoring | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const load = () =>
+      fetch(`/api/monitor/agreements/${id}`, { cache: "no-store" })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => !cancelled && d && setData(d))
+        .catch(() => {});
+    load();
+    const timer = setInterval(load, 15_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [id, status]);
+  return data;
+}
+
+function MonitorStatusLine({ status }: { status: MonitorStatus | null }) {
+  const [now, setNow] = useState<number | null>(null);
+  useEffect(() => {
+    const tick = () => setNow(Date.now());
+    tick();
+    const timer = setInterval(tick, 5_000);
+    return () => clearInterval(timer);
+  }, []);
+  if (!status || !now) return null;
+  const last = status.lastRunAt ? new Date(status.lastRunAt).getTime() : null;
+  const online = last !== null && now - last < status.intervalMs * 2.5;
+  const seconds = last === null ? 0 : Math.max(0, Math.round((now - last) / 1000));
+  const agoLabel =
+    seconds < 5 ? "just now" : seconds < 60 ? `${seconds}s ago` : `${Math.round(seconds / 60)} min ago`;
+  // The monitor can check endpoints but not settle when its wallet isn't
+  // authorized on the contract (or a settlement failed). Say so plainly.
+  const blocked =
+    status.lastResult?.skipped && !/in progress/i.test(status.lastResult.skipped)
+      ? status.lastResult.skipped
+      : status.lastResult?.errors?.[0];
   return (
-    <div className="table-scroll">
-      <table className="checks-table">
-        <thead>
-          <tr>
-            <th>CHECK TIME</th>
-            <th>REGION</th>
-            <th>RESPONSE</th>
-            <th>RESULT</th>
-          </tr>
-        </thead>
-        <tbody>
-          {visible.map((c, i) => {
-            const success = failed ? i % 4 !== 0 : c.success;
-            return (
-              <tr key={c.id}>
-                <td>
-                  {lastChecked
-                    ? new Date(
-                        new Date(lastChecked).getTime() - c.secondsAgo * 1000,
-                      ).toLocaleTimeString("en-US")
-                    : `${c.secondsAgo}s ago`}
-                </td>
-                <td>{c.region}</td>
-                <td>
-                  {success
-                    ? Math.round(maxLatency * 0.5 + maxLatency * 0.02 * (i % 8))
-                    : "—"}
-                  {success && "ms"}
-                </td>
-                <td>
-                  <span className={`check-result ${success ? "" : "failed"}`}>
-                    {success ? <Check size={13} /> : <X size={13} />}
-                    {success ? "200 OK" : "Timeout"}
-                  </span>
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+    <>
+      <p className={`monitor-status ${online ? "" : "offline"}`}>
+        <i className="live-dot" />
+        {online
+          ? `Monitor online · last check ${agoLabel}`
+          : "Monitor offline · checks resume when the monitor runs"}
+      </p>
+      {online && blocked && (
+        <p className="monitor-blocked">
+          Health checks are running, but agreements can&apos;t be settled yet:{" "}
+          {blocked}
+        </p>
+      )}
+    </>
   );
 }
