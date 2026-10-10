@@ -574,6 +574,32 @@ strong {
   border-radius: 50%;
   background: #8c9bad;
 }
+.hero-contract-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  margin-top: 20px;
+  padding: 9px 14px;
+  border: 1px solid #20345325;
+  border-radius: 999px;
+  background: #ffffff80;
+  color: var(--navy);
+  font-size: 12px;
+  line-height: 1.5;
+  transition: background 0.2s, border-color 0.2s;
+}
+.hero-contract-link svg {
+  flex-shrink: 0;
+}
+.hero-contract-link:hover {
+  background: #ffffffc9;
+  border-color: #547bab80;
+}
+.hero-contract-link:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 4px;
+}
 .hero-console-wrap {
   max-width: 1010px;
   margin: 62px auto 0;

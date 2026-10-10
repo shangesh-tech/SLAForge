@@ -124,6 +124,17 @@ export default function Home() {
                   USDC escrow
                 </span>
               </div>
+              <a
+                className="hero-contract-link"
+                href={explorerAddress(SLAFORGE_ADDRESS)}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={`View SLAForge contract ${SLAFORGE_ADDRESS} on Arc Explorer`}
+              >
+                <ShieldCheck size={16} aria-hidden="true" />
+                <span>Contract verified on Arc</span>
+                <ArrowUpRight size={15} aria-hidden="true" />
+              </a>
             </Reveal>
             <Reveal delay={0.15} className="hero-console-wrap">
               <div className="hero-console">
